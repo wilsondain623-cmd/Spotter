@@ -811,18 +811,20 @@ function liftSeries(c){
     if (!s.exercises) continue;
     for (const x of s.exercises){
       let top = null, vol = 0;
+      const e1rm = (w, r) => (!r || r <= 1) ? w : Math.round(w * (1 + Math.min(r, 12) / 30));
       if (x.setDetail && x.setDetail.length){
         for (const sd of x.setDetail){
           if (sd.weight == null) continue;
-          vol += sd.weight * repN(sd.reps);
-          if (!top || sd.weight > top.w) top = { w: sd.weight, r: repN(sd.reps) };
+          const r = repN(sd.reps), e = e1rm(sd.weight, r);
+          vol += sd.weight * r;
+          if (!top || e > top.e1) top = { w: sd.weight, r, e1: e };
         }
       } else if (x.weight != null){
         const r = repN(x.reps);
         vol = x.weight * r * (x.sets || 1);
-        top = { w: x.weight, r };
+        top = { w: x.weight, r, e1: e1rm(x.weight, r) };
       }
-      if (top){ (map[x.name] = map[x.name] || []).push({ date: s.date, w: top.w, r: top.r, vol }); }
+      if (top){ (map[x.name] = map[x.name] || []).push({ date: s.date, w: top.w, r: top.r, e1: top.e1, vol }); }
     }
   }
   return map;
@@ -831,7 +833,7 @@ function liftSeries(c){
 function chartSvg(pts){
   const W = 520, H = 210, L = 46, R = 12, T = 18, B = 34;
   const iw = W - L - R, ih = H - T - B;
-  const ws = pts.map(p=>p.w), vmax = Math.max(...pts.map(p=>p.vol), 1);
+  const ws = pts.map(p=>p.e1), vmax = Math.max(...pts.map(p=>p.vol), 1);
   let wmin = Math.min(...ws), wmax = Math.max(...ws);
   if (wmax === wmin){ wmax += 10; wmin = Math.max(0, wmin - 10); }
   const pad = (wmax - wmin) * 0.15; wmin = Math.max(0, wmin - pad); wmax += pad;
@@ -853,13 +855,13 @@ function chartSvg(pts){
   }
   /* top-set line */
   if (pts.length > 1){
-    const path = pts.map((p,i)=>`${i?"L":"M"}${X(i)},${Y(p.w)}`).join(" ");
+    const path = pts.map((p,i)=>`${i?"L":"M"}${X(i)},${Y(p.e1)}`).join(" ");
     out += `<path d="${path}" fill="none" stroke="#4D7DB4" stroke-width="2.5" stroke-linejoin="round"/>`;
   }
   /* dots + weight×reps labels + x dates */
   for (let i = 0; i < pts.length; i++){
-    const p = pts[i], x = X(i), y = Y(p.w);
-    const detail = `${fmtDate(p.date)} · top set ${p.r?`${p.w}×${p.r} = ${p.w*p.r} lbs`:p.w+" lbs (no reps logged)"}${p.vol?` · session volume ${Math.round(p.vol)}`:""}`;
+    const p = pts[i], x = X(i), y = Y(p.e1);
+    const detail = `${fmtDate(p.date)} · best set ${p.r?`${p.w}×${p.r}`:p.w+" lbs (no reps logged)"} · est 1RM ${p.e1} lbs${p.vol?` · session volume ${Math.round(p.vol)}`:""}`;
     out += `<circle cx="${x}" cy="${y}" r="4.5" fill="#A8C4E0" stroke="#0A0E18" stroke-width="1.5" data-bmv="${detail}"><title>${detail}</title></circle>`;
     const lx = Math.min(Math.max(x, L+20), W-R-22);
     out += `<text x="${lx}" y="${y-9}" text-anchor="middle" fill="#CFD3DC" font-size="11" font-weight="700">${p.r?`${p.w}×${p.r}`:p.w}</text>`;
@@ -885,13 +887,13 @@ function buildChartCards(c){
   return entries.map(({n, pts})=>{
     const last = pts[pts.length-1];
     const first = pts[0];
-    const delta = pts.length > 1 ? (last.w - first.w) : 0;
-    const trend = pts.length > 1 ? ` · ${delta >= 0 ? "+" : ""}${delta} lbs since ${fmtDate(first.date)}` : " · first data point";
+    const delta = pts.length > 1 ? (last.e1 - first.e1) : 0;
+    const trend = pts.length > 1 ? ` · ${delta >= 0 ? "+" : ""}${delta} lbs e1RM since ${fmtDate(first.date)}` : " · first data point";
     return `<div class="card">
       <div class="row"><div class="grow"><div class="d-name">${esc(n)}</div>
-      <div class="d-meta">top set ${last.r?`${last.w}×${last.r}`:last.w+" lbs"}${trend}</div></div></div>
+      <div class="d-meta">est 1RM ${last.e1} lbs (best set ${last.r?`${last.w}×${last.r}`:last.w})${trend}</div></div></div>
       <div style="margin-top:8px">${chartSvg(pts)}</div>
-      <div class="muted" style="margin-top:4px;font-size:10px">Bold line: top-set weight (labels: weight×reps) · Thin line: session volume · Hover or tap points for detail</div>
+      <div class="muted" style="margin-top:4px;font-size:10px">Bold line: estimated 1RM (Epley) · Labels: actual best set weight×reps · Thin line: session volume · Hover or tap points for detail</div>
     </div>`;
   }).join("");
 }
@@ -936,16 +938,17 @@ function tabNotes(c){
 }
 
 function assignModal(){
-  const it = draft[assignTarget];
+  const creating = assignTarget === -1;
+  const it = creating ? { raw: "" } : draft[assignTarget];
   const grid = E.MUSCLES.map(m=>{
     const st = assignSel[m]||"";
     return `<div class="mg ${st}" data-mus="${m}">${m}${st==="p"?" ●":st==="s"?" ○":""}</div>`;
   }).join("");
   return `<div class="modal-bg" data-close="1"><div class="modal">
-    <h2 style="margin-top:0">Which muscles? — “${esc(it.raw)}”</h2>
+    <h2 style="margin-top:0">${creating ? "New exercise — which muscles?" : `Which muscles? — “${esc(it.raw)}”`}</h2>
     <div class="muted">Tap once = primary ●, twice = secondary ○, three times = clear.</div>
     <div class="mgrid">${grid}</div>
-    <div class="minirow"><span class="lbl">Name</span><input type="text" id="newexname" value="${esc(it.raw.replace(/\d.*$/,"").trim())}"></div>
+    <div class="minirow"><span class="lbl">Name</span><input type="text" id="newexname" value="${esc((it.raw||"").replace(/\d.*$/,"").trim())}" placeholder="e.g. Tricep Extension Machine"></div>
     <button class="btn" style="margin-top:12px" data-act="confirm-assign">Save exercise</button>
     <button class="btn2" style="margin-top:8px;width:100%" data-act="cancel-assign">Cancel</button>
   </div></div>`;
@@ -957,6 +960,7 @@ function pickerModal(){
     <span>${esc(ex.p.join(", "))}${ex.s.length?" · +"+esc(ex.s.join(", ")):""}</span></div>`).join("");
   return `<div class="modal-bg" data-close="1"><div class="modal">
     <input type="text" id="picksearch" placeholder="Search exercises…" autocomplete="off">
+    <button class="btn2" style="width:100%;margin-top:8px" data-act="new-exercise">＋ Create new exercise</button>
     <div id="picklist" style="margin-top:8px">${items}</div>
   </div></div>`;
 }
@@ -967,7 +971,7 @@ function parseText(){
   const { parsed, unmatched } = E.parseSession(t, S.customExercises);
   for (const p of parsed) draft.push(p);
   for (const u of unmatched) draft.push({ ...u, unmatched:true });
-  if (!parsed.length && !unmatched.length) toast("Couldn't find any exercises in that text");
+  if (!parsed.length && !unmatched.length) toast("Nothing parsed — include sets like 3x10, or use + Quick add > Create new exercise");
   render();
 }
 
@@ -1032,7 +1036,8 @@ function saveSession(){
 }
 
 function confirmAssign(){
-  const it = draft[assignTarget];
+  const creating = assignTarget === -1;
+  const it = creating ? { raw: "", sets: 3, reps: "", weight: null, intensity: "moderate" } : draft[assignTarget];
   const p = Object.keys(assignSel).filter(m=>assignSel[m]==="p");
   const s = Object.keys(assignSel).filter(m=>assignSel[m]==="s");
   if (!p.length){ toast("Pick at least one primary muscle"); return; }
@@ -1043,9 +1048,10 @@ function confirmAssign(){
     : { name, aliases:[E.normalize(name)], p, s };
   if (ex !== existing){ S.customExercises.push(ex); }
   save();
-  draft[assignTarget] = { name, primary:p, secondary:s, sets:it.setDetail?it.setDetail.length:(it.sets||3),
+  const item = { name, primary:p, secondary:s, sets:it.setDetail?it.setDetail.length:(it.sets||3),
     reps:it.reps||"", weight:it.weight??null, intensity:it.intensity||"moderate",
     ...(it.setDetail?{setDetail:it.setDetail}:{}), raw:it.raw };
+  if (creating) draft.push(item); else draft[assignTarget] = item;
   assignTarget = null; assignSel = {};
   render(); toast(`Added “${name}” to your exercise library`);
 }
@@ -1160,6 +1166,7 @@ function bind(){
       if (a==="back"){ if (draft.length && !confirm("Discard the unsaved session draft?")) return; draft=[]; draftTitle=""; view={page:"roster",clientId:null,tab:"fatigue"}; render(); }
       else if (a==="parse") parseText();
       else if (a==="picker"){ pickerOpen=true; render(); setTimeout(()=>$("#picksearch")?.focus(),50); }
+      else if (a==="new-exercise"){ pickerOpen=false; assignTarget=-1; assignSel={}; view.tab="log"; render(); }
       else if (a==="save-session") saveSession();
       else if (a==="confirm-assign") confirmAssign();
       else if (a==="cancel-assign"){ assignTarget=null; render(); }
