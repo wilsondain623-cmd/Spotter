@@ -229,6 +229,13 @@ function decaySnapshot(snapshot, days) {
   return out;
 }
 
+/* readiness-coupled decay: factor<1 (poor recovery) slows clearance, >1 speeds it */
+function decaySnapshotAdj(snapshot, days, factor=1) {
+  const out = {};
+  for (const m of MUSCLES) out[m] = Math.max(0, (snapshot[m] || 0) * Math.pow(DECAY_BY_MUSCLE[m] || DECAY_RATE, days * factor));
+  return out;
+}
+
 /* exercises: [{name, sets, intensity, primary, secondary}] */
 function repFactor(reps) {
   const nums = String(reps ?? "").match(/\d+/g);
@@ -416,9 +423,9 @@ function parseSession(text, customLib) {
 
 const BIG_GROUPS = ["quads","hamstrings","glutes","chest","lats","mid-back"];
 
-function brief(snapshot, lastUpdated, todayISO) {
+function brief(snapshot, lastUpdated, todayISO, recFactor=1) {
   const days = daysBetween(lastUpdated, todayISO);
-  const cur = decaySnapshot(snapshot, days);
+  const cur = decaySnapshotAdj(snapshot, days, recFactor);
   const recovering = MUSCLES.filter(m => cur[m] > 4.0).sort((a, b) => cur[b] - cur[a]);
   const fresh = MUSCLES.filter(m => cur[m] < 1.5);
   const readyBig = BIG_GROUPS.filter(m => cur[m] < 4.0).sort((a, b) => cur[a] - cur[b]);
@@ -433,9 +440,28 @@ function brief(snapshot, lastUpdated, todayISO) {
   return { current: cur, daysSince: days, recovering, fresh, ready: readyBig, suggestion };
 }
 
+/* ---- Recovery entry parser: "recovery 45 hrv 42 rhr 58 slept 6.5 steps 9k feel 3" ---- */
+function parseRecovery(text){
+  const t = " " + text.toLowerCase().replace(/[,;]/g," ") + " ";
+  const num = rx => { const m = t.match(rx); return m ? parseFloat(m[1]) : null; };
+  const k = rx => { const m = t.match(rx); if(!m) return null; let v = parseFloat(m[1]); if (/k/i.test(m[2]||"")) v*=1000; return Math.round(v); };
+  const out = {};
+  let v;
+  if ((v = num(/\b(?:whoop|recovery|recov)\s*(\d{1,3})\s*%?/)) != null) out.whoop = Math.min(100, v);
+  if ((v = num(/\bhrv\s*(\d{1,3})/)) != null) out.hrv = v;
+  if ((v = num(/\b(?:rhr|resting(?:\s*(?:hr|heart\s*rate))?)\s*(\d{2,3})/)) != null) out.rhr = v;
+  if ((v = num(/\b(?:slept|sleep(?:\s*(?:for|time|duration))?)\s*(\d{1,2}(?:\.\d)?)\s*(?:h|hr|hrs|hours)?/)) != null) out.sleepH = v;
+  if ((v = num(/\b(?:sleep\s*quality|quality)\s*(\d)/)) != null) out.sleepQ = v;
+  const sm = t.match(/\b(?:steps?)\s*(\d{1,3}(?:[.,]?\d{3})*|\d+(?:\.\d+)?)\s*(k)?/) || t.match(/\b(\d{1,2}(?:\.\d+)?)\s*(k)\s*steps?/);
+  if (sm){ let s = parseFloat(String(sm[1]).replace(/,/g,"")); if (/k/i.test(sm[2]||"")) s*=1000; out.steps = Math.round(s); }
+  if ((v = num(/\b(?:feel(?:ing)?|mood)\s*(\d)\b/)) != null) out.feel = Math.min(5, v);
+  return out;
+}
+
 const Engine = {
   MUSCLES, INTENSITY, EXERCISE_LIBRARY, BASE_PRIMARY, SECONDARY_FACTOR, DECAY_RATE, DOMS_BUMP, CAP,
   setLoadSum, daysBetween, decaySnapshot, sessionFatigue, applySession, round1, DECAY_BY_MUSCLE, repFactor,
+  decaySnapshotAdj, parseRecovery,
   SYS_BASE, SYS_DECAY, sessionSys, applySys, decaySys,
   normalize, matchExercise, detectIntensity, parseSetsReps, parseSetTokens, parseWeight, maxWeight,
   parseSession, brief, BIG_GROUPS,
@@ -443,6 +469,109 @@ const Engine = {
 
 if (typeof module !== "undefined") module.exports = Engine;
 if (typeof window !== "undefined") window.Engine = Engine;
+
+/* ============================================================
+   Spotter Recovery / Readiness model — evidence-aligned
+   Grounded in: HRV(RMSSD) deviation from personal rolling baseline is the
+   top marker (Plews/Buchheit; WHOOP weighting); RHR inverse & less sensitive;
+   sleep loss ~7.5% perf hit, 1-2 night recovery; 3-7 day trend > single reading;
+   subjective wellness adds independent signal.
+   ============================================================ */
+(function(root){
+  const clamp = (x,lo,hi) => Math.max(lo, Math.min(hi, x));
+  const mean = a => a.reduce((s,v)=>s+v,0)/a.length;
+  const sd = a => { const m=mean(a); return Math.sqrt(mean(a.map(v=>(v-m)*(v-m)))); };
+
+  /* rolling baseline from prior entries for a metric key (last N, need >=3) */
+  function baseline(entries, key, N=14){
+    const vals = entries.map(e=>e[key]).filter(v=>v!=null && !isNaN(v)).slice(-N);
+    if (vals.length < 3) return null;
+    const m = mean(vals);
+    return { mean: m, sd: Math.max(sd(vals), Math.abs(m)*0.05, 1e-6), n: vals.length };
+  }
+
+  /* signed contribution in [-1,1]; 0 = at baseline. 1.5 SD swing = full scale. */
+  function zContribution(x, base, invert=false){
+    if (base == null || x == null) return null;
+    let z = (x - base.mean) / base.sd;
+    if (invert) z = -z;                 // RHR: lower is better
+    return clamp(z / 1.5, -1, 1);
+  }
+
+  function sleepContribution(h, q, need=8){
+    let parts = [], w = [];
+    if (h != null){ parts.push(clamp((h - need)/2, -1, 0.4)); w.push(0.7); }
+    if (q != null){ parts.push(clamp((q - 3)/2, -1, 1));      w.push(0.3); }
+    if (!parts.length) return null;
+    const tw = w.reduce((s,v)=>s+v,0);
+    return parts.reduce((s,v,i)=>s+v*w[i],0) / tw;
+  }
+  const feelContribution = f => f==null ? null : clamp((f-3)/2, -1, 1);
+
+  const WEIGHTS = { hrv: 0.40, rhr: 0.18, sleep: 0.27, feel: 0.15 };
+
+  /* Map baseline-neutral raw[-1,1] to 0-100 with asymmetry:
+     at baseline -> 70 (solidly ready); bad days fall faster than good days rise. */
+  function rawToScore(raw){
+    return clamp(Math.round(70 + (raw >= 0 ? 30*raw : 65*raw)), 1, 100);
+  }
+
+  /* today's entry = latest; prior entries build the baseline.
+     sysLoad = current systemic-fatigue score (0-10) from the training model. */
+  function readiness(entries, sysLoad=0){
+    if (!entries || !entries.length) return null;
+    const sorted = [...entries].sort((a,b)=>a.date.localeCompare(b.date));
+    const today = sorted[sorted.length-1];
+    const prior = sorted.slice(0, -1);
+
+    const comps = {
+      hrv:  zContribution(today.hrv,  baseline(prior,"hrv"),  false),
+      rhr:  zContribution(today.rhr,  baseline(prior,"rhr"),  true),
+      sleep: sleepContribution(today.sleepH, today.sleepQ),
+      feel: feelContribution(today.feel),
+    };
+
+    let score, usedWhoop = false;
+    if (today.whoop != null){
+      usedWhoop = true;                          // validated device score = spine
+      score = today.whoop;
+    } else {
+      let num=0, den=0;
+      for (const k in WEIGHTS) if (comps[k]!=null){ num += WEIGHTS[k]*comps[k]; den += WEIGHTS[k]; }
+      score = den ? rawToScore(num/den) : null;  // no inputs -> unknown
+    }
+    if (score == null) return { score:null, band:"unknown", comps, usedWhoop, hasData:false };
+
+    /* systemic pressure the wearable can't see from a manual score:
+       apply lightly, and less when a device HRV/whoop is present (avoids double count). */
+    const sysPenalty = clamp((sysLoad - 4) * 2.5, 0, 18);
+    const damp = (usedWhoop || comps.hrv != null) ? 0.35 : 1.0;
+    score = clamp(Math.round(score - sysPenalty * damp), 1, 100);
+
+    const band = score >= 67 ? "green" : score >= 34 ? "yellow" : "red";
+    return { score, band, comps, usedWhoop, sysPenalty: Math.round(sysPenalty*damp), hasData:true };
+  }
+
+  /* Recovery couples back into muscle-fatigue decay:
+     low readiness slows recovery, high speeds it (bounded).
+     effective_decay = base_decay ^ factor, factor<1 => retains more => slower recovery. */
+  function recoveryFactor(score){
+    if (score == null) return 1.0;
+    return clamp(score / 70, 0.62, 1.32);
+  }
+
+  /* steps -> extra systemic load (external daily activity the gym log misses).
+     ~8k steps baseline neutral; each additional 4k ≈ +0.4 systemic, capped. */
+  function stepSys(steps){
+    if (steps == null) return 0;
+    return clamp((steps - 8000) / 4000 * 0.4, 0, 1.2);
+  }
+
+  const Recovery = { baseline, zContribution, sleepContribution, feelContribution,
+    readiness, recoveryFactor, stepSys, rawToScore, WEIGHTS };
+  if (typeof module !== "undefined") module.exports = Recovery;
+  if (root) root.Recovery = Recovery;
+})(typeof window !== "undefined" ? window : null);
 
 </script>
 <script>
@@ -462,7 +591,7 @@ function zeroSnap(){ const s={}; E.MUSCLES.forEach(m=>s[m]=0); return s; }
 function seedState(){
   const mk=(name,profile,sessions=[],prs=[])=>({
     id:name.toLowerCase().replace(/\s+/g,"-"), name, profile,
-    snapshot:zeroSnap(), sysFatigue:0, lastUpdated:"2026-06-22",
+    snapshot:zeroSnap(), sysFatigue:0, recovery:[], lastUpdated:"2026-06-22",
     sessions, prs, notes:[], nextPlan:""
   });
   return {
@@ -523,6 +652,18 @@ let pickerOpen = false;
 const $ = sel => document.querySelector(sel);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function client(){ return S.clients.find(c => c.id === view.clientId); }
+const RECENT_DAYS = 3;
+function curSys(c){ return E.decaySys(c.sysFatigue||0, E.daysBetween(c.lastUpdated, todayISO())); }
+function curReadiness(c){
+  if (!c.recovery || !c.recovery.length) return null;
+  const last = c.recovery[c.recovery.length-1] || c.recovery.slice().sort((x,y)=>x.date.localeCompare(y.date)).slice(-1)[0];
+  const days = E.daysBetween(last.date, todayISO());
+  if (days > RECENT_DAYS) return { stale:true, ...Recovery.readiness(c.recovery, curSys(c)), ageDays:days };
+  return { ...Recovery.readiness(c.recovery, curSys(c)), ageDays:days };
+}
+function recFactor(c){ const r = curReadiness(c); return (r && r.score!=null && !r.stale) ? Recovery.recoveryFactor(r.score) : 1; }
+function readyColor(score){ return score>=67?"#5fb48a":score>=34?"#d4a04d":"#c95f5f"; }
+function readyWord(score){ return score>=67?"ready":score>=34?"caution":"compromised"; }
 function toast(msg){
   const t=document.createElement("div"); t.className="toast"; t.textContent=msg;
   document.body.appendChild(t); setTimeout(()=>t.remove(),2200);
@@ -586,11 +727,14 @@ function render(){
 
 function rosterView(){
   const rows = S.clients.map(c => {
-    const b = E.brief(c.snapshot, c.lastUpdated, todayISO());
+    const b = E.brief(c.snapshot, c.lastUpdated, todayISO(), recFactor(c));
     const last = c.sessions[0] ? E.daysBetween(c.sessions[0].date, todayISO()) : null;
-    const status = b.recovering.length
-      ? `<span class="chip hot">${b.recovering[0]} ${E.round1(b.current[b.recovering[0]])}</span>`
-      : `<span class="chip fresh">fresh</span>`;
+    const r = curReadiness(c);
+    const status = (r && r.score!=null && !r.stale)
+      ? `<span class="chip" style="color:${readyColor(r.score)};border-color:${readyColor(r.score)}44">♥ ${r.score}</span>`
+      : (b.recovering.length
+        ? `<span class="chip hot">${b.recovering[0]} ${E.round1(b.current[b.recovering[0]])}</span>`
+        : `<span class="chip fresh">fresh</span>`);
     return `<div class="card row" data-open="${c.id}" style="cursor:pointer">
       <div class="avatar">${esc(c.name[0])}</div>
       <div class="grow"><div class="cname">${esc(c.name)}</div>
@@ -606,17 +750,18 @@ function rosterView(){
     <div class="footer-note">Data lives on this device — export a backup from ⛭ regularly.</div>`;
 }
 
-function daysToReady(m, v){
+function daysToReady(m, v, factor=1){
   if (v <= 4.0) return 0;
-  const rate = E.DECAY_BY_MUSCLE[m] || E.DECAY_RATE;
+  const rate = Math.pow(E.DECAY_BY_MUSCLE[m] || E.DECAY_RATE, factor);
   return Math.ceil(Math.log(4.0 / v) / Math.log(rate));
 }
 
+let _curFactor = 1;
 function fatigueBars(cur){
   const rows = E.MUSCLES.slice().sort((a,b)=>cur[b]-cur[a]).map(m=>{
     const v = E.round1(cur[m]);
     const col = heat(v);
-    const d = daysToReady(m, v);
+    const d = daysToReady(m, v, _curFactor);
     const chip = d === 0
       ? (v <= 1.5
         ? `<span style="width:34px;text-align:center;font-size:10px;font-weight:800;color:${heat(0)}">✓</span>`
@@ -641,7 +786,7 @@ function fatigueBars(cur){
 
 function clientView(){
   const c = client(); if(!c){ view.page="roster"; return rosterView(); }
-  const tabs = [["fatigue","Fatigue"],["log","Log"],["brief","Brief"],["charts","Charts"],["history","History"],["notes","Notes"]]
+  const tabs = [["fatigue","Fatigue"],["recovery","Recovery"],["log","Log"],["brief","Brief"],["charts","Charts"],["history","History"],["notes","Notes"]]
     .map(([k,l])=>`<button class="tab ${view.tab===k?"on":""}" data-tab="${k}">${l}</button>`).join("");
   return `<header><button class="backlink" data-act="back">‹ Roster</button>
     <div class="word" style="margin-left:6px"><b>${esc(c.name)}</b></div>
@@ -649,7 +794,7 @@ function clientView(){
     <div class="sub">${crescent}</div></header>
     <div class="muted">${esc(c.profile||"")}</div>
     <div class="tabs">${tabs}</div>
-    ${ {fatigue:tabFatigue,log:tabLog,brief:tabBrief,charts:tabCharts,history:tabHistory,notes:tabNotes}[view.tab](c) }
+    ${ {fatigue:tabFatigue,recovery:tabRecovery,log:tabLog,brief:tabBrief,charts:tabCharts,history:tabHistory,notes:tabNotes}[view.tab](c) }
     ${assignTarget!==null?assignModal():""}
     ${pickerOpen?pickerModal():""}`;
 }
@@ -680,12 +825,31 @@ function sysGauge(c){
   </div>`;
 }
 
+function readyRing(c){
+  const r = curReadiness(c);
+  if (!r || r.score==null) return `<div style="width:56px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer" data-tab="recovery">
+    <div style="width:44px;height:44px;border-radius:50%;border:3px solid #232c42;display:flex;align-items:center;justify-content:center;font-size:11px;color:#8b93a5">–</div>
+    <div style="font-size:9px;letter-spacing:1px;color:#8b93a5">READY</div>
+    <div style="font-size:9px;color:#8b93a5;text-align:center">tap to log</div></div>`;
+  const col = readyColor(r.score), C = 2*Math.PI*20, off = C*(1 - r.score/100);
+  return `<div style="width:56px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer" data-tab="recovery"
+    title="Readiness ${r.score}/100">
+    <svg width="48" height="48" viewBox="0 0 48 48"><circle cx="24" cy="24" r="20" fill="none" stroke="#1a2233" stroke-width="5"/>
+      <circle cx="24" cy="24" r="20" fill="none" stroke="${col}" stroke-width="5" stroke-linecap="round"
+        stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" transform="rotate(-90 24 24)"/>
+      <text x="24" y="28" text-anchor="middle" fill="${col}" font-size="15" font-weight="800">${r.score}</text></svg>
+    <div style="font-size:9px;letter-spacing:1px;color:#8b93a5">READY</div>
+    <div style="font-size:9px;font-weight:800;color:${col}">${readyWord(r.score)}${r.stale?" (old)":""}</div>
+  </div>`;
+}
+
 function tabFatigue(c){
-  const cur = E.decaySnapshot(c.snapshot, E.daysBetween(c.lastUpdated, todayISO()));
-  return `<div class="card"><div style="display:flex;gap:12px;align-items:stretch">
-    ${sysGauge(c)}
+  _curFactor = recFactor(c);
+  const cur = E.decaySnapshotAdj(c.snapshot, E.daysBetween(c.lastUpdated, todayISO()), _curFactor);
+  return `<div class="card"><div style="display:flex;gap:10px;align-items:stretch">
+    ${sysGauge(c)}${readyRing(c)}
     <div style="flex:1;min-width:0">${bodyMap(cur)}</div></div>
-    <div class="muted" style="text-align:center;margin-top:4px">Tap a muscle for its score · SYS = whole-body load.</div></div>
+    <div class="muted" style="text-align:center;margin-top:4px">Tap a muscle for its score · SYS = whole-body load · READY = recovery (tap to log).</div></div>
     <div class="card">${fatigueBars(cur)}
     <div class="muted" style="margin-top:10px">Sorted most-fatigued first · decayed to today from last update (${fmtDate(c.lastUpdated)}). 0 = fresh, 10 = maxed.</div></div>`;
 }
@@ -730,7 +894,8 @@ function flagsBlock(c){
 }
 
 function tabBrief(c){
-  const b = E.brief(c.snapshot, c.lastUpdated, todayISO());
+  const b = E.brief(c.snapshot, c.lastUpdated, todayISO(), recFactor(c));
+  const rr = curReadiness(c);
   const rec = b.recovering.length ? b.recovering.map(m=>`${m} (${E.round1(b.current[m])})`).join(", ") : "none — all clear";
   const readyBig = (b.ready||[]).map(m=>`${m} (${E.round1(b.current[m])})`).join(", ") || "none";
   const lastS = c.sessions[0];
@@ -739,7 +904,8 @@ function tabBrief(c){
     <div style="margin-top:6px"><span class="bb">Still recovering (&gt;4.0):</span> ${rec}</div>
     <div style="margin-top:6px"><span class="bb">Ready to load (&lt;4.0):</span> ${readyBig}</div>
     <div style="margin-top:6px"><span class="bb">Systemic load:</span> ${E.round1(E.decaySys(c.sysFatigue||0, b.daysSince))} / 10 (${sysWord(E.decaySys(c.sysFatigue||0, b.daysSince))})${E.decaySys(c.sysFatigue||0, b.daysSince)>6.5?" — consider a lighter day regardless of what looks fresh":""}</div>
-    <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">${esc(b.suggestion)}</div>
+    ${rr&&rr.score!=null&&!rr.stale?`<div style="margin-top:6px"><span class="bb">Readiness:</span> <span style="color:${readyColor(rr.score)};font-weight:800">${rr.score}</span> / 100 (${readyWord(rr.score)})</div>`:""}
+    <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">${(rr&&rr.score!=null&&!rr.stale&&rr.score<34)?`<span style="color:#e0a8a8;font-weight:700">Readiness is low (${rr.score}) — recovery is impaired; keep today light regardless of what looks fresh.</span><br>`:""}${esc(b.suggestion)}</div>
     ${c.nextPlan?`<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px"><span class="bb">Planned:</span> ${esc(c.nextPlan)}</div>`:""}
   </div>${volumeCard(c)}`;
 }
@@ -909,6 +1075,67 @@ function tabCharts(c){
 function prRow(p){
   return `<div class="pr"><div>${esc(p.exercise)}<div class="pd">${esc(p.detail||"")} · ${fmtDate(p.date)}</div></div>
      <div class="pv">${p.weight} lbs</div></div>`;
+}
+
+function readinessBreakdown(r){
+  if (!r || r.score==null) return "";
+  if (r.usedWhoop) return `<div class="muted" style="font-size:11px;margin-top:6px">From WHOOP recovery score${r.sysPenalty?` · −${r.sysPenalty} for tracked training load`:""}.</div>`;
+  const label = {hrv:"HRV",rhr:"resting HR",sleep:"sleep",feel:"feel"};
+  const parts = Object.keys(label).filter(k=>r.comps[k]!=null).map(k=>{
+    const v = r.comps[k], up = v>0.15, dn = v<-0.15;
+    const col = up?"#5fb48a":dn?"#c95f5f":"#8b93a5";
+    return `<span style="color:${col};font-size:11px;font-weight:700">${label[k]} ${up?"↑":dn?"↓":"~"}</span>`;
+  }).join(" · ");
+  return `<div style="margin-top:6px">${parts}${r.sysPenalty?` <span style="color:#8b93a5;font-size:11px">· −${r.sysPenalty} training load</span>`:""}</div>`;
+}
+
+function recTrendChart(c){
+  const pts = [...c.recovery].sort((a,b)=>a.date.localeCompare(b.date))
+    .map((e,i,arr)=>({ date:e.date, score: Recovery.readiness(arr.slice(0,i+1), 0).score }))
+    .filter(p=>p.score!=null);
+  if (pts.length < 2) return "";
+  const W=520,H=150,L=32,R=12,T=12,B=26, iw=W-L-R, ih=H-T-B;
+  const X=i=>pts.length===1?L+iw/2:L+iw*i/(pts.length-1), Y=s=>T+ih-ih*s/100;
+  let out="";
+  for (const g of [0,50,100]){ const y=Y(g); out+=`<line x1="${L}" y1="${y}" x2="${W-R}" y2="${y}" stroke="#232c42"/><text x="${L-5}" y="${y+3}" text-anchor="end" fill="#8b93a5" font-size="10">${g}</text>`; }
+  out+=`<line x1="${L}" y1="${Y(67)}" x2="${W-R}" y2="${Y(67)}" stroke="#2e4d3c" stroke-dasharray="3 3"/><line x1="${L}" y1="${Y(34)}" x2="${W-R}" y2="${Y(34)}" stroke="#5a3535" stroke-dasharray="3 3"/>`;
+  const path = pts.map((p,i)=>`${i?"L":"M"}${X(i)},${Y(p.score)}`).join(" ");
+  out+=`<path d="${path}" fill="none" stroke="#4D7DB4" stroke-width="2.5"/>`;
+  for (let i=0;i<pts.length;i++){ const p=pts[i]; out+=`<circle cx="${X(i)}" cy="${Y(p.score)}" r="3.5" fill="${readyColor(p.score)}" stroke="#0A0E18" stroke-width="1.2"/>`; }
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block;margin-top:8px">${out}</svg>`;
+}
+
+function tabRecovery(c){
+  const r = curReadiness(c);
+  const entries = [...(c.recovery||[])].sort((a,b)=>b.date.localeCompare(a.date));
+  const gauge = (r && r.score!=null) ? `<div class="card" style="text-align:center">
+      <div style="font-size:44px;font-weight:800;color:${readyColor(r.score)};line-height:1">${r.score}</div>
+      <div style="font-size:13px;font-weight:700;color:${readyColor(r.score)}">${readyWord(r.score).toUpperCase()}${r.stale?` · last entry ${r.ageDays}d ago`:""}</div>
+      ${readinessBreakdown(r)}
+      ${r.score<34?`<div style="margin-top:8px;color:#e0a8a8;font-size:12px">Recovery is compromised — train light today regardless of muscle freshness.</div>`:""}
+      ${recTrendChart(c)}
+    </div>` : `<div class="empty">No recovery data yet — log a morning entry below.</div>`;
+  const hist = entries.length ? `<h2>Entries</h2>` + entries.map((e,i)=>{
+    const bits = [];
+    if (e.whoop!=null) bits.push(`whoop ${e.whoop}`);
+    if (e.hrv!=null) bits.push(`hrv ${e.hrv}`);
+    if (e.rhr!=null) bits.push(`rhr ${e.rhr}`);
+    if (e.sleepH!=null) bits.push(`slept ${e.sleepH}h`);
+    if (e.sleepQ!=null) bits.push(`sleep q${e.sleepQ}`);
+    if (e.steps!=null) bits.push(`${(e.steps/1000).toFixed(1)}k steps`);
+    if (e.feel!=null) bits.push(`feel ${e.feel}`);
+    return `<div class="sess card"><div class="row"><div class="grow"><div class="sd">${fmtDate(e.date)}</div>
+      <div class="sx">${bits.join(" · ")||"—"}</div></div>
+      <button class="btn-x" data-delrec="${entries.length-1-i}">✕</button></div></div>`;
+  }).join("") : "";
+  return `${gauge}
+    <div class="card">
+      <input type="text" id="rectext" placeholder="e.g. whoop 62 · or: hrv 44 rhr 55 slept 7 feel 4 steps 8k" autocomplete="off">
+      <div class="minirow"><span class="lbl">Date</span><input type="date" id="recdate" value="${todayISO()}"></div>
+      <button class="btn" style="margin-top:8px" data-act="save-rec">Parse & save entry</button>
+      <div class="muted" style="margin-top:8px;font-size:10px">Read these off the client's WHOOP/Fitbit app (with their OK), or enter your own. Any subset works — HRV carries the most weight, then sleep and resting HR. Baseline builds over ~2 weeks of entries.</div>
+    </div>
+    ${hist}`;
 }
 
 function tabHistory(c){
@@ -1112,12 +1339,26 @@ function clientMenu(){
   });
 }
 
+function saveRecovery(){
+  const c = client();
+  const txt = $("#rectext").value.trim();
+  const parsed = txt ? E.parseRecovery(txt) : {};
+  if (!Object.keys(parsed).length){ toast("Nothing parsed — try: hrv 45 rhr 55 slept 7 feel 4"); return; }
+  parsed.date = $("#recdate").value || todayISO();
+  c.recovery = (c.recovery||[]).filter(e=>e.date!==parsed.date);
+  c.recovery.push(parsed);
+  c.recovery.sort((a,b)=>a.date.localeCompare(b.date));
+  save(); render();
+  const r = Recovery.readiness(c.recovery, curSys(c));
+  toast(r && r.score!=null ? `Saved. Readiness ${r.score}/100 (${readyWord(r.score)}).` : "Entry saved.");
+}
+
 function addClient(){
   const name = prompt("Client name?");
   if (!name || !name.trim()) return;
   const id = name.trim().toLowerCase().replace(/\s+/g,"-");
   if (S.clients.some(c=>c.id===id)){ toast("That client already exists"); return; }
-  S.clients.push({ id, name:name.trim(), profile:"", snapshot:zeroSnap(), sysFatigue:0, lastUpdated:todayISO(), sessions:[], prs:[], notes:[], nextPlan:"" });
+  S.clients.push({ id, name:name.trim(), profile:"", snapshot:zeroSnap(), sysFatigue:0, recovery:[], lastUpdated:todayISO(), sessions:[], prs:[], notes:[], nextPlan:"" });
   save(); render(); toast(`${name.trim()} added`);
 }
 
@@ -1125,12 +1366,13 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if (draft.length && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; chartSearch=""; render(); }
     else if (ds.bmv){ toast(ds.bmv); }
     else if (ds.crange){ chartRange = ds.crange; render(); }
+    else if (ds.delrec!==undefined && ds.delrec!==""){ const c=client(); const s=[...c.recovery].sort((a,b)=>a.date.localeCompare(b.date)); const tgt=s[+ds.delrec]; c.recovery=c.recovery.filter(x=>x!==tgt); save(); render(); toast("Entry deleted"); }
     else if (ds.editsess!==undefined && ds.editsess!==""){ const c=client(); const s=c.sessions[+ds.editsess];
       if (s && s.exercises){
         draft = s.exercises.map(x=>{ const m=exMuscles(x.name); return { ...x, primary:m.p, secondary:m.s }; });
@@ -1175,6 +1417,7 @@ function bind(){
       else if (a==="settings") settingsMenu();
       else if (a==="client-menu") clientMenu();
       else if (a==="add-client") addClient();
+      else if (a==="save-rec") saveRecovery();
     }
   };
   app.oninput = e => {
