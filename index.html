@@ -1128,7 +1128,13 @@ function tabRecovery(c){
       <div class="sx">${bits.join(" · ")||"—"}</div></div>
       <button class="btn-x" data-delrec="${entries.length-1-i}">✕</button></div></div>`;
   }).join("") : "";
-  return `${gauge}
+  const link = whoopConnectLink(c);
+  const syncRow = S.syncUrl ? `<div class="card"><div class="row" style="gap:8px">
+      <button class="btn2 grow" data-act="whoop-sync">⟳ Sync WHOOP</button>
+      <button class="btn2 grow" data-act="whoop-link">Connect link</button></div>
+      <div class="muted" style="margin-top:6px;font-size:10px">Connect link: send it to ${esc(c.name)} once — they authorize on their own phone. Then Sync pulls the last 14 days.</div>
+    </div>` : "";
+  return `${gauge}${syncRow}
     <div class="card">
       <input type="text" id="rectext" placeholder="e.g. whoop 62 · or: hrv 44 rhr 55 slept 7 feel 4 steps 8k" autocomplete="off">
       <div class="minirow"><span class="lbl">Date</span><input type="date" id="recdate" value="${todayISO()}"></div>
@@ -1307,6 +1313,12 @@ function settingsMenu(){
     <button class="btn" id="mExport">Export backup (JSON)</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="mImport">Import backup</button>
     <input type="file" id="mFile" accept=".json" style="display:none">
+    <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+      <h2 style="margin:0 0 8px">WHOOP sync (optional)</h2>
+      <input type="text" id="mSyncUrl" placeholder="Worker URL e.g. https://dwil-whoop-sync.you.workers.dev" value="${esc(S.syncUrl||"")}" style="margin-bottom:8px">
+      <input type="text" id="mSyncKey" placeholder="APP_KEY (same as in Cloudflare)" value="${esc(S.syncKey||"")}">
+      <button class="btn2" style="width:100%;margin-top:8px" id="mSyncSave">Save sync settings</button>
+    </div>
     <button class="btn2" style="width:100%;margin-top:8px;color:#e0a8a8" id="mReset">Reset to original seed data</button>
     <div class="muted" style="margin-top:12px">Tip: export a backup after big logging days and drop it in your project folder — Claude can read it there too.</div>
   </div>`;
@@ -1315,6 +1327,7 @@ function settingsMenu(){
     if (e.target===wrap) wrap.remove();
     if (e.target.id==="mExport") exportJSON();
     if (e.target.id==="mImport") wrap.querySelector("#mFile").click();
+    if (e.target.id==="mSyncSave"){ S.syncUrl = wrap.querySelector("#mSyncUrl").value.trim(); S.syncKey = wrap.querySelector("#mSyncKey").value.trim(); save(); toast("Sync settings saved"); }
     if (e.target.id==="mReset" && confirm("Replace ALL data with the original seed? Export first if unsure.")){ S=seedState(); save(); wrap.remove(); render(); }
   });
   wrap.querySelector("#mFile").addEventListener("change", e=>{ if(e.target.files[0]){ importJSON(e.target.files[0]); wrap.remove(); } });
@@ -1337,6 +1350,66 @@ function clientMenu(){
     if (ev.target.id==="cmDelete"){ if (confirm(`Delete ${c.name} and ALL their data? This cannot be undone. Export a backup first if unsure.`)){
       S.clients = S.clients.filter(x=>x.id!==c.id); save(); view={page:"roster",clientId:null,tab:"fatigue"}; render(); toast("Client deleted"); } wrap.remove(); }
   });
+}
+
+/* map WHOOP v2 API payload -> Spotter recovery entries (defensive on field names) */
+function whoopMap(payload){
+  const byDate = {};
+  const dOf = iso => iso ? String(iso).slice(0,10) : null;
+  for (const s of (payload.sleep||[])){
+    const d = dOf(s.end || s.start); if (!d) continue;
+    const sc = s.score || {}, st = sc.stage_summary || {};
+    let ms = null;
+    if (st.total_light_sleep_time_milli != null)
+      ms = (st.total_light_sleep_time_milli||0) + (st.total_slow_wave_sleep_time_milli||0) + (st.total_rem_sleep_time_milli||0);
+    if (ms == null && s.start && s.end) ms = new Date(s.end) - new Date(s.start);
+    const e = byDate[d] = byDate[d] || { date: d, src: "whoop" };
+    if (ms != null && ms > 0) e.sleepH = Math.round(ms/360000)/10;
+    if (sc.sleep_performance_percentage != null) e.sleepQ = Math.max(1, Math.min(5, Math.round(sc.sleep_performance_percentage/20)));
+  }
+  for (const r of (payload.recovery||[])){
+    const d = dOf(r.created_at || r.updated_at); if (!d) continue;
+    const sc = r.score || {};
+    const e = byDate[d] = byDate[d] || { date: d, src: "whoop" };
+    if (sc.recovery_score != null) e.whoop = Math.round(sc.recovery_score);
+    if (sc.hrv_rmssd_milli != null) e.hrv = Math.round(sc.hrv_rmssd_milli);
+    if (sc.resting_heart_rate != null) e.rhr = Math.round(sc.resting_heart_rate);
+  }
+  return Object.values(byDate).sort((x,y)=>x.date.localeCompare(y.date));
+}
+
+function mergeRecovery(c, entries){
+  let added = 0;
+  for (const inc of entries){
+    const i = (c.recovery||[]).findIndex(e=>e.date===inc.date);
+    if (i >= 0) c.recovery[i] = { ...c.recovery[i], ...inc };
+    else { c.recovery.push(inc); added++; }
+  }
+  c.recovery.sort((x,y)=>x.date.localeCompare(y.date));
+  return added;
+}
+
+function syncWhoop(){
+  const c = client();
+  if (!S.syncUrl || !S.syncKey){ toast("Set the WHOOP sync server in ⛭ first"); return; }
+  toast("Syncing WHOOP…");
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/sync?client=${encodeURIComponent(c.id)}&key=${encodeURIComponent(S.syncKey)}`)
+    .then(r=>r.json())
+    .then(data=>{
+      if (data.error === "not_connected"){ toast(`${c.name} hasn't authorized WHOOP yet — send them the connect link`); return; }
+      if (data.error){ toast("Sync error: " + data.error); return; }
+      const entries = whoopMap(data);
+      if (!entries.length){ toast("No WHOOP data returned"); return; }
+      const added = mergeRecovery(c, entries);
+      save(); render();
+      const r = Recovery.readiness(c.recovery, curSys(c));
+      toast(`Synced ${entries.length} days (${added} new). Readiness ${r&&r.score!=null?r.score+"/100":"–"}.`);
+    })
+    .catch(e=>toast("Sync failed: " + e.message));
+}
+
+function whoopConnectLink(c){
+  return S.syncUrl ? `${S.syncUrl.replace(/\/+$/,"")}/auth?client=${encodeURIComponent(c.id)}` : null;
 }
 
 function saveRecovery(){
@@ -1418,6 +1491,10 @@ function bind(){
       else if (a==="client-menu") clientMenu();
       else if (a==="add-client") addClient();
       else if (a==="save-rec") saveRecovery();
+      else if (a==="whoop-sync") syncWhoop();
+      else if (a==="whoop-link"){ const l = whoopConnectLink(client());
+        if (l && typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Connect link copied — text it to the client")).catch(()=>prompt("Send this link to the client:", l));
+        else if (l) prompt("Send this link to the client:", l); }
     }
   };
   app.oninput = e => {
