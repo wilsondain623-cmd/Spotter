@@ -662,6 +662,25 @@ function curReadiness(c){
   return { ...Recovery.readiness(c.recovery, curSys(c)), ageDays:days };
 }
 function recFactor(c){ const r = curReadiness(c); return (r && r.score!=null && !r.stale) ? Recovery.recoveryFactor(r.score) : 1; }
+
+/* Day-by-day decay: each elapsed day uses that day's readiness factor if an entry
+   exists for it, else normal speed. Returns equivalent "effective factor" for the gap. */
+function effFactor(c){
+  const days = E.daysBetween(c.lastUpdated, todayISO());
+  if (days === 0 || !c.recovery || !c.recovery.length) return 1;
+  const sorted = [...c.recovery].sort((x,y)=>x.date.localeCompare(y.date));
+  let eff = 0;
+  const t0 = new Date(c.lastUpdated + "T00:00:00").getTime();
+  for (let k = 1; k <= days; k++){
+    const d = localISO(new Date(t0 + k*86400000));
+    const idx = sorted.findIndex(e=>e.date===d);
+    if (idx >= 0){
+      const r = Recovery.readiness(sorted.slice(0, idx+1), 0);
+      eff += (r && r.score!=null) ? Recovery.recoveryFactor(r.score) : 1;
+    } else eff += 1;
+  }
+  return eff / days;
+}
 function readyColor(score){ return score>=67?"#5fb48a":score>=34?"#d4a04d":"#c95f5f"; }
 
 /* ---- injuries ---- */
@@ -749,7 +768,7 @@ function render(){
 
 function rosterView(){
   const rows = S.clients.map(c => {
-    const b = E.brief(c.snapshot, c.lastUpdated, todayISO(), recFactor(c));
+    const b = E.brief(c.snapshot, c.lastUpdated, todayISO(), effFactor(c));
     const last = c.sessions[0] ? E.daysBetween(c.sessions[0].date, todayISO()) : null;
     const r = curReadiness(c);
     const status = (r && r.score!=null && !r.stale)
@@ -868,7 +887,7 @@ function readyRing(c){
 
 function tabFatigue(c){
   _curFactor = recFactor(c);
-  const cur = E.decaySnapshotAdj(c.snapshot, E.daysBetween(c.lastUpdated, todayISO()), _curFactor);
+  const cur = E.decaySnapshotAdj(c.snapshot, E.daysBetween(c.lastUpdated, todayISO()), effFactor(c));
   const inj = activeInjuries(c);
   const injBanner = inj.length ? `<div style="margin-top:8px;padding:8px 10px;border:1px solid ${INJ_COLOR}55;border-radius:10px;background:${INJ_COLOR}14">
     ${inj.map(i=>`<div style="font-size:12px;color:#e3c8ec;font-weight:700" data-tab="injuries">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}</div>`).join("")}
@@ -921,7 +940,7 @@ function flagsBlock(c){
 }
 
 function tabBrief(c){
-  const b = E.brief(c.snapshot, c.lastUpdated, todayISO(), recFactor(c));
+  const b = E.brief(c.snapshot, c.lastUpdated, todayISO(), effFactor(c));
   const rr = curReadiness(c);
   const rec = b.recovering.length ? b.recovering.map(m=>`${m} (${E.round1(b.current[m])})`).join(", ") : "none — all clear";
   const _injM = injuredMuscles(c);
