@@ -447,7 +447,8 @@ function parseRecovery(text){
   const k = rx => { const m = t.match(rx); if(!m) return null; let v = parseFloat(m[1]); if (/k/i.test(m[2]||"")) v*=1000; return Math.round(v); };
   const out = {};
   let v;
-  if ((v = num(/\b(?:whoop|recovery|recov)\s*(\d{1,3})\s*%?/)) != null) out.whoop = Math.min(100, v);
+  if ((v = num(/\b(?:whoop|recovery|recov|readiness|body\s*battery|oura|garmin|fitbit|energy(?:\s*score)?)\s*(?:score\s*)?(\d{1,3})\s*%?/)) != null) out.whoop = Math.min(100, v);
+  if ((v = num(/\bsleep\s*score\s*(\d{1,3})/)) != null) out.sleepQ = Math.max(1, Math.min(5, Math.round(v/20)));
   if ((v = num(/\bhrv\s*(\d{1,3})/)) != null) out.hrv = v;
   if ((v = num(/\b(?:rhr|resting(?:\s*(?:hr|heart\s*rate))?)\s*(\d{2,3})/)) != null) out.rhr = v;
   if ((v = num(/\b(?:slept|sleep(?:\s*(?:for|time|duration))?)\s*(\d{1,2}(?:\.\d)?)\s*(?:h|hr|hrs|hours)?/)) != null) out.sleepH = v;
@@ -533,7 +534,7 @@ if (typeof window !== "undefined") window.Engine = Engine;
 
     let score, usedWhoop = false;
     if (today.whoop != null){
-      usedWhoop = true;                          // validated device score = spine
+      usedWhoop = true;                          // any device readiness score (WHOOP/Oura/Garmin/Fitbit) = spine
       score = today.whoop;
     } else {
       let num=0, den=0;
@@ -1134,7 +1135,7 @@ function prRow(p){
 
 function readinessBreakdown(r){
   if (!r || r.score==null) return "";
-  if (r.usedWhoop) return `<div class="muted" style="font-size:11px;margin-top:6px">From WHOOP recovery score${r.sysPenalty?` · −${r.sysPenalty} for tracked training load`:""}.</div>`;
+  if (r.usedWhoop) return `<div class="muted" style="font-size:11px;margin-top:6px">From device readiness score${r.sysPenalty?` · −${r.sysPenalty} for tracked training load`:""}.</div>`;
   const label = {hrv:"HRV",rhr:"resting HR",sleep:"sleep",feel:"feel"};
   const parts = Object.keys(label).filter(k=>r.comps[k]!=null).map(k=>{
     const v = r.comps[k], up = v>0.15, dn = v<-0.15;
@@ -1256,10 +1257,10 @@ function tabRecovery(c){
     </div>` : "";
   return `${gauge}${syncRow}
     <div class="card">
-      <input type="text" id="rectext" placeholder="e.g. whoop 62 · or: hrv 44 rhr 55 slept 7 feel 4 steps 8k" autocomplete="off">
+      <input type="text" id="rectext" placeholder="e.g. whoop 62 · oura 85 · body battery 70 · or: hrv 44 rhr 55 slept 7 feel 4" autocomplete="off">
       <div class="minirow"><span class="lbl">Date</span><input type="date" id="recdate" value="${todayISO()}"></div>
       <button class="btn" style="margin-top:8px" data-act="save-rec">Parse & save entry</button>
-      <div class="muted" style="margin-top:8px;font-size:10px">Read these off the client's WHOOP/Fitbit app (with their OK), or enter your own. Any subset works — HRV carries the most weight, then sleep and resting HR. Baseline builds over ~2 weeks of entries.</div>
+      <div class="muted" style="margin-top:8px;font-size:10px">Works with any tracker — WHOOP recovery, Oura readiness, Garmin body battery/training readiness, Fitbit readiness, Samsung energy score, or raw HRV/RHR/sleep from Apple Watch. Any subset works — HRV carries the most weight, then sleep and resting HR. Baseline builds over ~2 weeks of entries.</div>
     </div>
     ${hist}`;
 }
