@@ -637,6 +637,7 @@ function seedState(){
 let S;
 try { S = JSON.parse(store.getItem(LS_KEY)) || seedState(); }
 catch(e){ S = seedState(); }
+let _backupBusy = false;
 function save(){ store.setItem(LS_KEY, JSON.stringify(S)); autoBackup(); }
 save();
 
@@ -1627,7 +1628,6 @@ function rejectSub(idx){
   if (confirm("Reject and delete this submission?")){ const sid=s.id; pendingSubs=pendingSubs.filter(x=>x!==s); ackSub(sid); render(); toast("Rejected"); }
 }
 
-let _backupBusy = false;
 function autoBackup(force){
   if (!S.syncUrl || !S.syncKey || _backupBusy) return;
   const last = +(store.getItem("dwil-backup-ts")||0);
