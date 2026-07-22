@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E18">
+<title>Log a workout — Dwil Fitness</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Poppins:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{--obsidian:#0A0E18;--panel:#111726;--panel2:#161e30;--line:#232c42;--steel:#4D7DB4;--ice:#A8C4E0;--text:#F4F4F5;--muted:#CFD3DC;--dim:#8b93a5;--ok:#5fb48a;--hot:#c95f5f}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{background:var(--obsidian);color:var(--text);font-family:Manrope,Poppins,system-ui,sans-serif}
+body{min-height:100vh;padding:env(safe-area-inset-top,0) 16px 40px}
+#app{max-width:520px;margin:0 auto}
+header{display:flex;align-items:center;gap:10px;padding:20px 2px 8px}
+header .word{font-family:Poppins,sans-serif;font-size:18px}
+header .word b{font-weight:700}header .word span{font-weight:500;color:var(--ice)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+h1{font-size:18px;margin-bottom:4px}
+.sub{color:var(--dim);font-size:13px;line-height:1.5}
+label{display:block;font-size:12px;color:var(--dim);margin:12px 0 4px}
+textarea,input{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:11px;color:var(--text);font-family:inherit;font-size:15px;padding:11px 12px;outline:none}
+textarea{min-height:120px;resize:vertical;line-height:1.5}
+textarea:focus,input:focus{border-color:var(--steel)}
+button{font-family:inherit;font-size:15px;font-weight:700;border:none;border-radius:12px;cursor:pointer;width:100%;padding:13px}
+.btn{background:var(--steel);color:#fff}
+.btn:disabled{opacity:.5}
+.prev{margin-top:12px}
+.pex{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-bottom:6px;font-size:13px}
+.pex .n{font-weight:700}.pex .m{color:var(--dim);font-size:12px}
+.pex.unk{border-color:#5a4a2e}.pex.unk .n{color:#e0c48a}
+.done{text-align:center;padding:30px 10px}
+.done .big{font-size:40px}
+.muted{color:var(--dim);font-size:12px;line-height:1.5}
+.crescent{width:26px;height:26px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* ============================================================
+   Spotter Engine v2 — Dwil Fitness
+   Fatigue model, exercise library, and session text parser.
+   v2: per-set (pyramid) parsing via setDetail
+   ============================================================ */
+
+const MUSCLES = [
+  "quads","hamstrings","glutes","calves","chest","lats","mid-back","low-back",
+  "rear-delts","side-delts","front-delts","biceps","triceps","forearms-grip",
+  "core","adductors","abductors"
+];
+
+/* Intensity multipliers (spec) */
+const INTENSITY = { warmup: 0.3, moderate: 1.0, heavy: 1.5, max: 2.0 };
+
+const INTENSITY_WORDS = [
+  { rx: /\b(warm[\s-]?up|very light|easy|light)\b/i, key: "warmup" },
+  { rx: /\b(max(ed)?( out)?|amrap|true failure|to failure|failure)\b/i, key: "max" },
+  { rx: /\b(heavy|grindy|grinder|tough|hard|rpe\s?8|rpe\s?9|rpe\s?10)\b/i, key: "heavy" },
+  { rx: /\b(moderate|working sets?)\b/i, key: "moderate" },
+];
+
+/* Base fatigue per primary muscle per set (moderate). Secondary = 50%. */
+const BASE_PRIMARY = 0.4;
+const SECONDARY_FACTOR = 0.3;
+const DECAY_RATE = 0.78;   // per day (default: chest, lats, mid-back)
+/* small muscles recover faster; big lower-body slower */
+const DECAY_BY_MUSCLE = {
+  "biceps":0.72, "triceps":0.72, "side-delts":0.72, "rear-delts":0.72, "front-delts":0.72,
+  "calves":0.72, "forearms-grip":0.72, "core":0.72, "abductors":0.72, "adductors":0.72,
+  "quads":0.81, "hamstrings":0.81, "glutes":0.81, "low-back":0.81,
+};
+const DOMS_BUMP = 1.15;    // +15% on session day
+const CAP = 10.0;
+
+/* ---------------- Exercise library ---------------- */
+const EXERCISE_LIBRARY = [
+  { name: "Back Squat", aliases: ["back squat","barbell squat","squat","squats"], p: ["quads"], s: ["glutes","hamstrings"], sys: 1.2 },
+  { name: "Front Squat", aliases: ["front squat","front squats"], p: ["quads"], s: ["glutes","core","low-back"], sys: 1.2 },
+  { name: "Bulgarian Split Squat", aliases: ["bulgarian split squat","bulgarian split squats","bulgarian","split squat","split squats","rear foot elevated split squat"], p: ["quads","glutes"], s: ["hamstrings","adductors"], sys: 1.1 },
+  { name: "Deadlift", aliases: ["deadlift","deadlifts","conventional deadlift","sumo deadlift","trap bar deadlift","hex bar deadlift"], p: ["hamstrings","glutes"], s: ["low-back","quads","forearms-grip","mid-back"], sys: 1.4 },
+  { name: "Good Morning", aliases: ["good morning","good mornings"], p: ["hamstrings"], s: ["low-back","glutes"], sys: 1.1 },
+  { name: "Shrug", aliases: ["shrug","shrugs","barbell shrug","db shrugs"], p: ["mid-back"], s: ["forearms-grip"] },
+  { name: "Dips", aliases: ["dip","dips","chest dips","parallel bar dips"], p: ["triceps","chest"], s: ["front-delts"] },
+  { name: "Push-up", aliases: ["push-up","push-ups","pushup","pushups","push up","push ups"], p: ["chest"], s: ["triceps","front-delts","core"] },
+  { name: "Step-up", aliases: ["step-up","step-ups","step up","step ups","box step ups"], p: ["quads","glutes"], s: ["hamstrings"] },
+  { name: "Hack Squat", aliases: ["hack squat"], p: ["quads"], s: ["glutes","hamstrings"], sys: 1.2 },
+  { name: "Leg Press", aliases: ["leg press"], p: ["quads"], s: ["glutes","hamstrings"], sys: 1.2 },
+  { name: "DB Squat", aliases: ["db squat","dumbbell squat","goblet squat"], p: ["quads"], s: ["glutes","hamstrings"] },
+  { name: "RDL", aliases: ["rdl","romanian deadlift","db rdl","heavy db rdl"], p: ["hamstrings"], s: ["glutes","low-back"], sys: 1.2 },
+  { name: "Walking Lunge", aliases: ["walking lunge","walking lunges","lunge","lunges"], p: ["quads","glutes"], s: ["hamstrings"] },
+  { name: "Reverse Lunge", aliases: ["reverse lunge","reverse lunge with db overhead"], p: ["quads","glutes"], s: ["hamstrings"] },
+  { name: "Hip Thrust", aliases: ["hip thrust"], p: ["glutes"], s: ["hamstrings"] },
+  { name: "Leg Curl", aliases: ["leg curl","hamstring curl"], p: ["hamstrings"], s: [] },
+  { name: "Nordic Curl", aliases: ["nordic curl","nordic curls","nordic ham curl","nordics"], p: ["hamstrings"], s: ["core"] },
+  { name: "Leg Extension", aliases: ["leg extension","isometric leg extension"], p: ["quads"], s: [] },
+  { name: "Calf Raise", aliases: ["calf raise","calf raises"], p: ["calves"], s: [] },
+  { name: "Bench Press", aliases: ["bench press","barbell bench","bench"], p: ["chest"], s: ["front-delts","triceps"] },
+  { name: "DB Bench Press", aliases: ["db bench","dumbbell bench","db bench press","single arm db bench press"], p: ["chest"], s: ["front-delts","triceps"] },
+  { name: "Machine Chest Press", aliases: ["machine chest press","chest press machine","chest press"], p: ["chest"], s: ["front-delts","triceps"] },
+  { name: "Incline Press", aliases: ["incline press","incline bench","incline bench press","incline smith machine bench press","incline db press"], p: ["chest"], s: ["front-delts","triceps"] },
+  { name: "Chest Fly", aliases: ["chest fly","chest flies","pec fly","pec deck","cable fly","cable flies","cable chest fly","cable chest flies","high-to-low chest fly","high to low chest fly","high-to-low cable chest fly","high to low cable chest flies"], p: ["chest"], s: [] },
+  { name: "Lat Pulldown", aliases: ["lat pulldown","lat pulldowns","pulldown"], p: ["lats"], s: ["biceps","rear-delts","mid-back"] },
+  { name: "Pull-up", aliases: ["pull-up","pull up","pullup","chin-up","chin up","chinup"], p: ["lats"], s: ["biceps","rear-delts","mid-back"] },
+  { name: "Seated Row", aliases: ["seated row"], p: ["mid-back"], s: ["lats","biceps","rear-delts"] },
+  { name: "Cable Row", aliases: ["cable row","cable rows"], p: ["mid-back"], s: ["lats","biceps"] },
+  { name: "T-Bar Row", aliases: ["t-bar row","t bar row","tbar row","chest supported t-bar row","chest supported row"], p: ["mid-back"], s: ["lats","biceps","rear-delts"] },
+  { name: "Face Pull", aliases: ["face pull","band pull-apart","band pull apart"], p: ["rear-delts"], s: ["mid-back"] },
+  { name: "Shoulder Press", aliases: ["oh press","overhead press","shoulder press","machine shoulder press","military press"], p: ["front-delts"], s: ["side-delts","triceps"] },
+  { name: "Lateral Raise", aliases: ["lateral raise","lateral raises","db lateral raise","side raise"], p: ["side-delts"], s: [] },
+  { name: "Reverse Fly", aliases: ["db reverse fly","reverse fly","reverse flies","rear delt fly","rear delt cable fly","rear delt cable flies","rear delt flies"], p: ["rear-delts"], s: [] },
+  { name: "Bicep Curl", aliases: ["bicep curl","bicep curls","barbell curl","db curl","db bicep curl","db bicep curls","preacher curl","preacher curls","spider curl","concentration curl","ez bar curl","ez curl","incline curl","incline curls"], p: ["biceps"], s: ["forearms-grip"] },
+  { name: "Cable Bicep Curl", aliases: ["cable bicep curl","cable curl"], p: ["biceps"], s: ["forearms-grip"] },
+  { name: "Hammer Curl", aliases: ["hammer curl","hammer curls","db hammer curl","rope hammer curl"], p: ["biceps"], s: ["forearms-grip"] },
+  { name: "Reverse Curl", aliases: ["reverse curl","reverse grip curl","reverse grip bicep curl","reverse grip bicep curls"], p: ["biceps"], s: ["forearms-grip"] },
+  { name: "Tricep Pushdown", aliases: ["tricep pushdown","tricep pushdowns","pushdown","rope tricep pushdown","rope tricep pushdowns","long rope tricep pushdown","single arm tricep pushdown","single arm tricep pushdowns"], p: ["triceps"], s: [] },
+  { name: "Overhead Tricep Extension", aliases: ["oh extension","overhead extension","overhead tricep extension","skull crusher","skull crushers"], p: ["triceps"], s: [] },
+  { name: "Triceps Press", aliases: ["triceps press","tricep press","dip machine","weighted dip"], p: ["triceps"], s: ["chest","front-delts"] },
+  { name: "Plank", aliases: ["plank","planks"], p: ["core"], s: [] },
+  { name: "Side Plank", aliases: ["side plank","side planks","side plank raise","side plank raises"], p: ["core"], s: ["abductors"] },
+  { name: "Ab Crunch", aliases: ["ab crunch","crunch","crunches","cable ab crunch","cable crunch"], p: ["core"], s: [] },
+  { name: "Leg Lift", aliases: ["leg lift","leg lifts","leg raise","leg raises","leg lift holds with crunches","leg lift hold"], p: ["core"], s: [] },
+  { name: "TRX Pushup", aliases: ["trx pushup","trx pushups","trx push-up","trx push ups"], p: ["chest"], s: ["front-delts","triceps","core"] },
+  { name: "Dead Bug", aliases: ["dead bug","dead bugs","bird dog","bird dogs"], p: ["core"], s: [] },
+  { name: "Adductor Machine", aliases: ["adductor machine","adductors machine","adductor"], p: ["adductors"], s: [] },
+  { name: "Abductor Machine", aliases: ["abductor machine","abductors machine","abductor"], p: ["abductors"], s: [] },
+  { name: "Lateral Trunk Flexion", aliases: ["lateral trunk flexion","lateral trunk flexion with kb","db hold lateral flexion","lateral flexion"], p: ["core"], s: [] },
+  { name: "Cable Rotation", aliases: ["cable rotation","cable rotations","pallof press"], p: ["core"], s: [] },
+  { name: "Shoulder Taps", aliases: ["shoulder taps","shoulder tap"], p: ["core"], s: ["front-delts"] },
+  { name: "Rope Machine Pull", aliases: ["rope machine pull","rope machine pulls","rope pulls"], p: ["lats"], s: ["biceps","forearms-grip","core"] },
+  { name: "Conditioning", aliases: ["conditioning","field day","lateral slides","skipping","hops"], p: ["calves"], s: ["quads","hamstrings","core"], sys: 1.6 },
+  { name: "Running", aliases: ["run","running","jog","jogging","treadmill run","treadmill"], p: ["quads","calves"], s: ["hamstrings","glutes","core"], sys: 1.6 },
+  { name: "Sprints", aliases: ["sprint","sprints","build-up sprints","hill sprints"], p: ["hamstrings","glutes"], s: ["quads","calves","core"], sys: 1.6 },
+  { name: "Bike", aliases: ["bike","cycling","spin bike","stationary bike"], p: ["quads"], s: ["glutes","hamstrings","calves"], sys: 1.6 },
+  { name: "Assault Bike", aliases: ["assault bike","air bike","echo bike"], p: ["quads"], s: ["biceps","triceps","calves","core"], sys: 1.6 },
+  { name: "Rowing", aliases: ["rowing","row erg","erg","rower"], p: ["mid-back","quads"], s: ["lats","hamstrings","biceps","core","forearms-grip"], sys: 1.6 },
+  { name: "Jump Rope", aliases: ["jump rope","jump-rope","jumping rope"], p: ["calves"], s: ["quads","core","forearms-grip"], sys: 1.6 },
+  { name: "Box Jumps", aliases: ["box jump","box jumps"], p: ["quads","glutes"], s: ["calves","hamstrings","core"], sys: 1.3 },
+  { name: "Broad Jumps", aliases: ["broad jump","broad jumps","standing long jump"], p: ["quads","glutes"], s: ["calves","hamstrings","core"], sys: 1.3 },
+  { name: "Lateral Bounds", aliases: ["lateral bound","lateral bounds","skater jumps","skaters"], p: ["glutes","abductors"], s: ["quads","calves","adductors"], sys: 1.3 },
+  { name: "Depth Jumps", aliases: ["depth jump","depth jumps","pogo hops","pogos"], p: ["calves","quads"], s: ["glutes","core"], sys: 1.3 },
+  { name: "Burpees", aliases: ["burpee","burpees"], p: ["quads","chest"], s: ["core","front-delts","triceps","calves"], sys: 1.6 },
+  { name: "Sled Push", aliases: ["sled push","sled pushes","prowler"], p: ["quads","glutes"], s: ["calves","core"], sys: 1.6 },
+  { name: "Sled Pull", aliases: ["sled pull","sled pulls","sled drag"], p: ["hamstrings","glutes"], s: ["mid-back","forearms-grip","core"], sys: 1.6 },
+  { name: "Stair Climber", aliases: ["stair climber","stairs","stairmaster","step mill"], p: ["quads","glutes"], s: ["calves"], sys: 1.6 },
+  { name: "Swimming", aliases: ["swim","swimming","laps"], p: ["lats","front-delts"], s: ["mid-back","triceps","core"], sys: 1.6 },
+  { name: "Mountain Climbers", aliases: ["mountain climber","mountain climbers"], p: ["core"], s: ["front-delts","quads"], sys: 1.3 },
+];
+
+/* ---------------- Core math ---------------- */
+
+function setLoadSum(nSets) {
+  let sum = 0;
+  for (let i = 1; i <= nSets; i++) sum += i <= 3 ? 1.0 : i <= 5 ? 0.8 : 0.6;
+  return sum;
+}
+
+function daysBetween(fromISO, toISO) {
+  const ms = new Date(toISO + "T00:00:00") - new Date(fromISO + "T00:00:00");
+  return Math.max(0, Math.round(ms / 86400000));
+}
+
+function decaySnapshot(snapshot, days) {
+  const out = {};
+  for (const m of MUSCLES) out[m] = Math.max(0, (snapshot[m] || 0) * Math.pow(DECAY_BY_MUSCLE[m] || DECAY_RATE, days));
+  return out;
+}
+
+/* readiness-coupled decay: factor<1 (poor recovery) slows clearance, >1 speeds it */
+function decaySnapshotAdj(snapshot, days, factor=1) {
+  const out = {};
+  for (const m of MUSCLES) out[m] = Math.max(0, (snapshot[m] || 0) * Math.pow(DECAY_BY_MUSCLE[m] || DECAY_RATE, days * factor));
+  return out;
+}
+
+/* exercises: [{name, sets, intensity, primary, secondary}] */
+function repFactor(reps) {
+  const nums = String(reps ?? "").match(/\d+/g);
+  if (!nums || !nums.length) return 1.0;
+  const avg = nums.reduce((a,b)=>a + +b, 0) / nums.length;
+  return Math.min(1.5, Math.max(0.7, Math.sqrt(avg / 8)));
+}
+
+function sessionFatigue(exercises) {
+  const add = {};
+  for (const m of MUSCLES) add[m] = 0;
+  for (const ex of exercises) {
+    const mult = INTENSITY[ex.intensity] ?? 1.0;
+    const load = setLoadSum(ex.sets || 3) * repFactor(ex.reps);
+    for (const m of ex.primary || []) add[m] += BASE_PRIMARY * mult * load;
+    for (const m of ex.secondary || []) add[m] += BASE_PRIMARY * SECONDARY_FACTOR * mult * load;
+  }
+  return add;
+}
+
+/* Full update: decay old snapshot to session date, add session fatigue with DOMS bump, cap. */
+function applySession(snapshot, lastUpdated, sessionDate, exercises) {
+  const days = daysBetween(lastUpdated, sessionDate);
+  const decayed = decaySnapshot(snapshot, days);
+  const add = sessionFatigue(exercises);
+  const out = {};
+  for (const m of MUSCLES) out[m] = Math.min(CAP, decayed[m] + add[m] * DOMS_BUMP);
+  return out;
+}
+
+function round1(x) { return Math.round(x * 10) / 10; }
+
+/* ---- Systemic (whole-body) load: recovers ~2x faster than muscle fatigue ---- */
+const SYS_BASE = 0.18, SYS_DECAY = 0.62;
+function sessionSys(exercises){
+  let t = 0;
+  for (const ex of exercises) t += SYS_BASE * (INTENSITY[ex.intensity] ?? 1) * setLoadSum(ex.sets || 3) * (ex.sys || 1);
+  return t;
+}
+function applySys(v, lastUpdated, date, exercises){
+  const days = daysBetween(lastUpdated, date);
+  return Math.min(CAP, v * Math.pow(SYS_DECAY, days) + sessionSys(exercises));
+}
+function decaySys(v, days){ return Math.max(0, v * Math.pow(SYS_DECAY, days)); }
+
+/* ---------------- Parser ---------------- */
+
+function normalize(s) {
+  return s.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function matchExercise(text, customLib) {
+  const t = " " + normalize(text) + " ";
+  const tSing = " " + normalize(text).replace(/(\w+)s\b/g, "$1") + " ";
+  let best = null, bestLen = 0;
+  const libs = customLib ? EXERCISE_LIBRARY.concat(customLib) : EXERCISE_LIBRARY;
+  for (const ex of libs) {
+    for (const a of ex.aliases) {
+      const aa = " " + a + " ";
+      const aSing = " " + a.replace(/(\w+)s\b/g, "$1") + " ";
+      if ((t.includes(aa) || tSing.includes(aSing) || tSing.includes(aa) || t.includes(aSing)) && a.length > bestLen) {
+        best = ex; bestLen = a.length;
+      }
+    }
+  }
+  return best;
+}
+
+function detectIntensity(text) {
+  for (const w of INTENSITY_WORDS) if (w.rx.test(text)) return w.key;
+  return "moderate";
+}
+
+/* Plain sets×reps: 4x8, 4×8-12, 3 sets of 10, 3x45s, 4 sets.
+   First number < 20 (a plausible set count). */
+function parseSetsReps(seg) {
+  let m;
+  if ((m = seg.match(/\b(\d{1,2})\s*(?:[x×]|by)\s*(\d+)(?:\s*[-–]\s*(\d+))?\s*(s|sec|seconds)?\b/i)) && +m[1] < 20) {
+    return { sets: +m[1], reps: m[4] ? m[2] + "s" : (m[3] ? `${m[2]}-${m[3]}` : m[2]) };
+  }
+  if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:min|mins|minutes)\b/i))) {
+    const mins = +m[1];
+    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${mins}min` };
+  }
+  if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:miles?|mi)\b/i))) {
+    const mins = +m[1] * 9;
+    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${m[1]}mi` };
+  }
+  if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:km|kilometers?)\b/i))) {
+    const mins = +m[1] * 5.6;
+    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${m[1]}km` };
+  }
+  if ((m = seg.match(/(\d+)\s*sets?\s*(?:of\s*(\d+)(?:\s*[-–]\s*(\d+))?)?/i))) {
+    let reps = m[3] ? `${m[2]}-${m[3]}` : (m[2] || "");
+    if (!reps) { const rm = seg.match(/\b(\d{1,2})\s*reps?\b/i); if (rm) reps = rm[1]; }
+    return { sets: +m[1], reps };
+  }
+  return null;
+}
+
+/* Per-set (pyramid) tokens: weight×reps like "135x10" (first number >= 20),
+   or reps@weight like "10@135". Returns [{weight, reps}] in order found. */
+function parseSetTokens(seg) {
+  const found = [];
+  const rx = /(\d+(?:\.\d+)?)\s*(?:[x×]|by)\s*(\d+)\b/gi;
+  let m;
+  while ((m = rx.exec(seg))) {
+    const a = +m[1], b = +m[2];
+    if (a >= 20) found.push({ weight: a, reps: String(b), idx: m.index });
+  }
+  const rx2 = /\b(\d{1,2})\s*@\s*(\d+(?:\.\d+)?)/g;
+  while ((m = rx2.exec(seg))) {
+    const r = +m[1], w = +m[2];
+    if (w >= 20) found.push({ weight: w, reps: String(r), idx: m.index });
+  }
+  found.sort((a, b) => a.idx - b.idx);
+  return found.map(({ weight, reps }) => ({ weight, reps }));
+}
+
+function parseWeight(seg) {
+  let m;
+  if ((m = seg.match(/(?:at|@)\s*(\d+(?:\.\d+)?)\s*(?:lbs?|pounds?)?\b/i))) return +m[1];
+  if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:lbs?|pounds?)\b/i))) return +m[1];
+  return null;
+}
+
+function maxWeight(setDetail) {
+  const ws = setDetail.map(s => s.weight).filter(w => w != null);
+  return ws.length ? Math.max(...ws) : null;
+}
+
+/* Split free text into segments and parse each.
+   A segment with only weight×reps tokens continues the previous exercise
+   (pyramid style: "bench 135x10, 155x8, 185x6").
+   Returns { parsed: [...], unmatched: [...] } */
+function parseSession(text, customLib) {
+  const segments = text
+    .split(/\n|,|;|•|(?:\s+then\s+)|(?:finished with)|(?:started with)/i)
+    .map(s => s && s.trim()).filter(s => s && s.length > 1);
+  const parsed = [], unmatched = [];
+  let last = null; /* most recent item (parsed or unmatched) for pyramid continuation */
+  const appendTokens = (item, tokens) => {
+    if (!item.setDetail) {
+      item.setDetail = [];
+      const n = item.assumedSets ? 0 : (item.sets || 0);
+      for (let i = 0; i < n; i++) item.setDetail.push({ reps: item.reps || "", weight: item.weight ?? null });
+      delete item.assumedSets;
+    }
+    item.setDetail.push(...tokens);
+    item.sets = item.setDetail.length;
+    item.reps = item.setDetail.map(t => t.reps).join("/");
+    item.weight = maxWeight(item.setDetail);
+  };
+  for (const seg of segments) {
+    const tokens = parseSetTokens(seg);
+    const sr = parseSetsReps(seg);
+    const ex = matchExercise(seg, customLib);
+    if (ex) {
+      const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: detectIntensity(seg), raw: seg };
+      let item;
+      if (tokens.length) {
+        item = { ...base, setDetail: tokens, sets: tokens.length,
+          reps: tokens.map(t => t.reps).join("/"), weight: maxWeight(tokens) };
+      } else if (sr) {
+        item = { ...base, sets: sr.sets, reps: sr.reps, weight: parseWeight(seg) };
+      } else {
+        item = { ...base, sets: 3, reps: "", weight: parseWeight(seg), assumedSets: true };
+      }
+      parsed.push(item); last = item;
+    } else if (tokens.length && !sr && last) {
+      /* bare weight×reps segment: continuation of previous exercise (pyramid sets) */
+      appendTokens(last, tokens);
+    } else if (sr || tokens.length) {
+      const item = { raw: seg, sets: sr ? sr.sets : tokens.length, reps: sr ? sr.reps : tokens.map(t=>t.reps).join("/"),
+        weight: tokens.length ? maxWeight(tokens) : parseWeight(seg),
+        setDetail: tokens.length ? tokens : undefined, intensity: detectIntensity(seg) };
+      unmatched.push(item); last = item;
+    }
+    /* else: filler text, skip */
+  }
+  return { parsed, unmatched };
+}
+
+/* ---------------- Brief ---------------- */
+
+const BIG_GROUPS = ["quads","hamstrings","glutes","chest","lats","mid-back"];
+
+function brief(snapshot, lastUpdated, todayISO, recFactor=1) {
+  const days = daysBetween(lastUpdated, todayISO);
+  const cur = decaySnapshotAdj(snapshot, days, recFactor);
+  const recovering = MUSCLES.filter(m => cur[m] > 4.0).sort((a, b) => cur[b] - cur[a]);
+  const fresh = MUSCLES.filter(m => cur[m] < 1.5);
+  const readyBig = BIG_GROUPS.filter(m => cur[m] < 4.0).sort((a, b) => cur[a] - cur[b]);
+  let suggestion;
+  if (recovering.length === 0 && readyBig.length === BIG_GROUPS.length) {
+    suggestion = "Everything is recovered — any focus works. Good day for the heaviest priority lift.";
+  } else if (readyBig.length > 0) {
+    suggestion = "Ready to load: " + readyBig.join(", ") + ". Steer volume there; go easy on " + (recovering.slice(0, 3).join(", ") || "nothing — all clear") + ".";
+  } else {
+    suggestion = "Every big group still carries fatigue — favor technique, core, or lighter accessory work today.";
+  }
+  return { current: cur, daysSince: days, recovering, fresh, ready: readyBig, suggestion };
+}
+
+/* ---- Recovery entry parser: "recovery 45 hrv 42 rhr 58 slept 6.5 steps 9k feel 3" ---- */
+function parseRecovery(text){
+  const t = " " + text.toLowerCase().replace(/[,;]/g," ") + " ";
+  const num = rx => { const m = t.match(rx); return m ? parseFloat(m[1]) : null; };
+  const k = rx => { const m = t.match(rx); if(!m) return null; let v = parseFloat(m[1]); if (/k/i.test(m[2]||"")) v*=1000; return Math.round(v); };
+  const out = {};
+  let v;
+  if ((v = num(/\b(?:whoop|recovery|recov|readiness|body\s*battery|oura|garmin|fitbit|energy(?:\s*score)?)\s*(?:score\s*)?(\d{1,3})\s*%?/)) != null) out.whoop = Math.min(100, v);
+  if ((v = num(/\bsleep\s*score\s*(\d{1,3})/)) != null) out.sleepQ = Math.max(1, Math.min(5, Math.round(v/20)));
+  if ((v = num(/\bhrv\s*(\d{1,3})/)) != null) out.hrv = v;
+  if ((v = num(/\b(?:rhr|resting(?:\s*(?:hr|heart\s*rate))?)\s*(\d{2,3})/)) != null) out.rhr = v;
+  if ((v = num(/\b(?:slept|sleep(?:\s*(?:for|time|duration))?)\s*(\d{1,2}(?:\.\d)?)\s*(?:h|hr|hrs|hours)?/)) != null) out.sleepH = v;
+  if ((v = num(/\b(?:sleep\s*quality|quality)\s*(\d)/)) != null) out.sleepQ = v;
+  const sm = t.match(/\b(?:steps?)\s*(\d{1,3}(?:[.,]?\d{3})*|\d+(?:\.\d+)?)\s*(k)?/) || t.match(/\b(\d{1,2}(?:\.\d+)?)\s*(k)\s*steps?/);
+  if (sm){ let s = parseFloat(String(sm[1]).replace(/,/g,"")); if (/k/i.test(sm[2]||"")) s*=1000; out.steps = Math.round(s); }
+  if ((v = num(/\b(?:feel(?:ing)?|mood)\s*(\d)\b/)) != null) out.feel = Math.min(5, v);
+  return out;
+}
+
+const Engine = {
+  MUSCLES, INTENSITY, EXERCISE_LIBRARY, BASE_PRIMARY, SECONDARY_FACTOR, DECAY_RATE, DOMS_BUMP, CAP,
+  setLoadSum, daysBetween, decaySnapshot, sessionFatigue, applySession, round1, DECAY_BY_MUSCLE, repFactor,
+  decaySnapshotAdj, parseRecovery,
+  SYS_BASE, SYS_DECAY, sessionSys, applySys, decaySys,
+  normalize, matchExercise, detectIntensity, parseSetsReps, parseSetTokens, parseWeight, maxWeight,
+  parseSession, brief, BIG_GROUPS,
+};
+
+if (typeof module !== "undefined") module.exports = Engine;
+if (typeof window !== "undefined") window.Engine = Engine;
+
+</script>
+<script>
+"use strict";
+const E = window.Engine;
+const qs = new URLSearchParams(location.search);
+const client = qs.get("c") || "";
+const worker = (qs.get("w") || "").replace(/\/+$/,"");
+const app = document.getElementById("app");
+const crescent = `<svg class="crescent" viewBox="0 0 100 100"><defs><linearGradient id="cg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4D7DB4"/><stop offset="1" stop-color="#A8C4E0"/></linearGradient></defs><path d="M62 8 A46 46 0 0 0 62 92 A54 54 0 0 1 62 8 Z" fill="url(#cg)"/></svg>`;
+const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const todayISO = () => { const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
+let submitted = false;
+
+function preview(text){
+  if (!text.trim()) return "";
+  const { parsed, unmatched } = E.parseSession(text, []);
+  if (!parsed.length && !unmatched.length) return `<div class="muted" style="margin-top:10px">Nothing recognized yet — try "bench 4x8 at 185, incline press 3x10".</div>`;
+  const rows = parsed.map(p=>`<div class="pex"><div class="n">${esc(p.name)}</div><div class="m">${p.setDetail?p.setDetail.map(s=>`${s.weight??"–"}×${s.reps||"?"}`).join(", "):`${p.sets}×${p.reps||"?"}${p.weight?" @ "+p.weight:""}`} · ${p.intensity}</div></div>`).join("");
+  const unk = unmatched.map(u=>`<div class="pex unk"><div class="n">? ${esc(u.raw)}</div><div class="m">your coach will sort this one out</div></div>`).join("");
+  return `<div class="prev"><div class="muted" style="margin-bottom:6px">Preview — this is what your coach receives:</div>${rows}${unk}</div>`;
+}
+
+function render(){
+  if (submitted){
+    app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>
+      <div class="card done"><div class="big">✓</div><h1 style="margin-top:8px">Workout sent</h1>
+      <div class="sub" style="margin-top:6px">Thanks${client?", "+esc(client):""} — your coach will review it and it'll factor into your training.</div>
+      <button class="btn" style="margin-top:18px" onclick="submitted=false;render()">Log another</button></div>`;
+    return;
+  }
+  if (!client || !worker){
+    app.innerHTML = `<div class="card"><h1>Link not set up</h1><div class="sub">Ask your coach for your personal workout-log link.</div></div>`;
+    return;
+  }
+  const t = (app.querySelector("#t")||{}).value || "";
+  app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>
+    <div class="card"><h1>Log a solo workout</h1>
+      <div class="sub">${esc(client)} — type what you did in plain English. Sets, reps, weight, and how hard it felt all help.</div>
+      <label>Your workout</label>
+      <textarea id="t" placeholder="e.g. bench press 4x8 at 185 heavy, incline db press 3x10, cable flies 3x15, tricep pushdowns 4x12">${esc(t)}</textarea>
+      <div id="prev"></div>
+      <label>Date</label><input type="date" id="d" value="${todayISO()}">
+      <label>Session name (optional)</label><input type="text" id="ti" placeholder="e.g. Push day">
+      <button class="btn" id="send" style="margin-top:14px">Send to coach</button>
+      <div class="muted" style="margin-top:10px">Works with anything — bodyweight, machines, cardio. Not sure of a name? Just write it, your coach handles the rest.</div>
+    </div>`;
+  const ta = app.querySelector("#t");
+  const pv = app.querySelector("#prev");
+  pv.innerHTML = preview(t);
+  ta.addEventListener("input", ()=>{ pv.innerHTML = preview(ta.value); });
+  app.querySelector("#send").addEventListener("click", send);
+}
+
+function send(){
+  const text = app.querySelector("#t").value.trim();
+  if (!text){ alert("Type your workout first"); return; }
+  const date = app.querySelector("#d").value || todayISO();
+  const title = app.querySelector("#ti").value.trim();
+  const btn = app.querySelector("#send"); btn.disabled = true; btn.textContent = "Sending…";
+  fetch(`${worker}/submit?c=${encodeURIComponent(client)}`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ date, title, text })
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok){ submitted = true; render(); }
+    else { btn.disabled=false; btn.textContent="Send to coach"; alert("Couldn't send: "+(d.error||"try again")); }
+  }).catch(e=>{ btn.disabled=false; btn.textContent="Send to coach"; alert("Network error — check your connection and retry."); });
+}
+render();
+</script>
+</body>
+</html>

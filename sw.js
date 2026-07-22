@@ -1,6 +1,6 @@
 const C = "dwil-spotter-cache-v1";
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(C).then(c => c.addAll(["./", "./index.html", "./manifest.json"])));
+  e.waitUntil(caches.open(C).then(c => c.addAll(["./", "./index.html", "./log.html", "./manifest.json"])));
   self.skipWaiting();
 });
 self.addEventListener("activate", e => {

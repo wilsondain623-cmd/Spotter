@@ -645,6 +645,7 @@ let draftDate = todayISO();
 let draftTitle = "";
 let chartRange = "3m";
 let chartSearch = "";
+let pendingSubs = null;   /* [{id,client,date,title,text}] fetched from worker */
 const CHART_RANGES = { "3m": 92, "6m": 183, "1y": 366 };
 let assignTarget = null;
 let assignSel = {};
@@ -760,11 +761,39 @@ function bodyMap(cur, injured){
   </div>`;
 }
 
+let _pendingFetched = false;
 function render(){
   const app = $("#app");
-  if (view.page === "roster") app.innerHTML = rosterView();
+  if (view.page === "review") app.innerHTML = reviewView();
+  else if (view.page === "roster") app.innerHTML = rosterView();
   else app.innerHTML = clientView();
   bind();
+  if (S.syncUrl && S.syncKey && !_pendingFetched){ _pendingFetched = true; fetchPending(); }
+}
+
+function reviewView(){
+  const subs = pendingSubs || [];
+  if (!subs.length) return `<header><button class="backlink" data-act="back">‹ Roster</button><div class="word" style="margin-left:6px"><b>Review</b></div></header>
+    <div class="empty">No pending client workouts. Pull to refresh from the roster.</div>`;
+  const cards = subs.map((s,i)=>{
+    const c = S.clients.find(x=>x.id===s.client);
+    const name = c ? c.name : s.client;
+    const { parsed, unmatched } = E.parseSession(s.text, S.customExercises);
+    const exRows = parsed.map(p=>`<div class="pex" style="background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:7px 10px;margin-bottom:5px;font-size:13px">
+      <b>${esc(p.name)}</b> <span style="color:var(--dim)">${p.setDetail?p.setDetail.map(x=>`${x.weight??"–"}×${x.reps||"?"}`).join(", "):`${p.sets}×${p.reps||"?"}${p.weight?" @ "+p.weight:""}`} · ${p.intensity}</span></div>`).join("");
+    const unk = unmatched.map(u=>`<div style="color:#e0c48a;font-size:12px;margin-bottom:4px">? ${esc(u.raw)} — will be skipped unless you add it manually</div>`).join("");
+    return `<div class="card">
+      <div class="row"><div class="grow"><div class="cname">${esc(name)}${c?"":' <span style="color:#e0a86a;font-size:11px">(no matching client)</span>'}</div>
+      <div class="csub">${fmtDate(s.date)}${s.title?" · "+esc(s.title):""} · submitted ${fmtDate((s.submitted||"").slice(0,10))}</div></div></div>
+      <div style="margin-top:8px">${exRows||'<div class="muted">Nothing parsed.</div>'}${unk}</div>
+      <div class="row" style="gap:8px;margin-top:10px">
+        ${c&&parsed.length?`<button class="btn2 grow" data-subapprove="${i}">✓ Approve → log it</button>`:""}
+        <button class="btn2 grow" style="color:#e0a8a8" data-subreject="${i}">Reject</button>
+      </div>
+      <div class="muted" style="margin-top:6px;font-size:10px">Approving runs it through the full model (fatigue, PRs, charts) for ${esc(name)}. Edit later via History if needed.</div>
+    </div>`;
+  }).join("");
+  return `<header><button class="backlink" data-act="back">‹ Roster</button><div class="word" style="margin-left:6px"><b>Review</b> <span style="color:var(--dim);font-weight:400">${subs.length}</span></div></header>${cards}`;
 }
 
 function rosterView(){
@@ -784,8 +813,14 @@ function rosterView(){
       <div class="csub">${last===null?"no sessions logged":last===0?"trained today":last+" days since last session"}</div></div>
       ${injN?`<span class="chip" style="color:#e3c8ec;border-color:${INJ_COLOR}66">⚠ ${injN}</span>`:""}${status}</div>`;
   }).join("");
+  const subBanner = (S.syncUrl && pendingSubs && pendingSubs.length)
+    ? `<div class="card" style="border-color:#4D7DB4;cursor:pointer" data-act="review"><div class="row">
+        <div class="grow"><div class="cname" style="color:var(--ice)">📥 ${pendingSubs.length} client workout${pendingSubs.length>1?"s":""} to review</div>
+        <div class="csub">${[...new Set(pendingSubs.map(s=>{const c=S.clients.find(x=>x.id===s.client);return c?c.name:s.client;}))].join(", ")}</div></div>
+        <span class="chip" style="color:var(--ice)">Review →</span></div></div>`
+    : "";
   return `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div><div class="sub">Spotter</div></header>
-    ${rows}
+    ${subBanner}${rows}
     <div class="row" style="gap:8px;margin-top:14px">
       <button class="btn" data-act="add-client">+ Add client</button>
       <button class="iconbtn" data-act="settings" title="Backup & data">⛭</button>
@@ -1368,6 +1403,17 @@ function rebuildClient(c){
   c.prs = Object.values(map).sort((a,b)=>b.date.localeCompare(a.date));
 }
 
+/* Save a parsed session for a specific client (used by log tab + client-submission review) */
+function applyParsedSession(c, items, date, title){
+  const before = {}; for (const p of c.prs) before[p.exercise] = p.weight;
+  c.sessions.push({ date, title: title||"Session", exercises: items.map(({name,sets,reps,weight,intensity,setDetail})=>({name,sets,reps,weight,intensity,...(setDetail?{setDetail}:{})})) });
+  c.sessions.sort((a,b)=>b.date.localeCompare(a.date));
+  rebuildClient(c);
+  let prMsg = "";
+  for (const p of c.prs) if (before[p.exercise] != null && p.weight > before[p.exercise]) prMsg = ` New PR: ${p.exercise} ${p.weight} lbs!`;
+  return prMsg;
+}
+
 function saveSession(){
   const c = client();
   if (draft.some(d=>d.unmatched)) { toast("Assign muscles to flagged items first"); return; }
@@ -1375,12 +1421,7 @@ function saveSession(){
   if (!items.length) return;
   draftDate = $("#sessdate").value || todayISO();
   const title = $("#sesstitle").value.trim() || "Session";
-  const before = {}; for (const p of c.prs) before[p.exercise] = p.weight;
-  c.sessions.push({ date:draftDate, title, exercises: items.map(({name,sets,reps,weight,intensity,setDetail})=>({name,sets,reps,weight,intensity,...(setDetail?{setDetail}:{})})) });
-  c.sessions.sort((a,b)=>b.date.localeCompare(a.date));
-  rebuildClient(c);
-  let prMsg = "";
-  for (const p of c.prs) if (before[p.exercise] != null && p.weight > before[p.exercise]) prMsg = ` New PR: ${p.exercise} ${p.weight} lbs!`;
+  const prMsg = applyParsedSession(c, items, draftDate, title);
   draft = []; draftDate = todayISO(); draftTitle = "";
   save();
   view.tab = "fatigue"; render();
@@ -1461,6 +1502,7 @@ function clientMenu(){
     <h2 style="margin-top:0">${esc(c.name)}</h2>
     <button class="btn2" style="width:100%" id="cmProfile">Edit profile / goals / injuries</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmRename">Rename client</button>
+    ${S.syncUrl?`<button class="btn2" style="width:100%;margin-top:8px" id="cmLogLink">Copy solo-log link</button>`:""}
     <button class="btn2" style="width:100%;margin-top:8px;color:#e0a8a8" id="cmDelete">Delete client…</button>
   </div>`;
   document.body.appendChild(wrap);
@@ -1468,6 +1510,7 @@ function clientMenu(){
     if (ev.target===wrap) wrap.remove();
     if (ev.target.id==="cmProfile"){ const p = prompt("Profile / goals / injury notes:", c.profile||""); if (p!==null){ c.profile=p.trim(); save(); render(); } wrap.remove(); }
     if (ev.target.id==="cmRename"){ const n = prompt("New name:", c.name); if (n && n.trim()){ c.name=n.trim(); save(); render(); } wrap.remove(); }
+    if (ev.target.id==="cmLogLink"){ const l = clientLogLink(c); if (l){ if (navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Solo-log link copied — text it to "+c.name)).catch(()=>prompt("Send this to "+c.name+":", l)); else prompt("Send this to "+c.name+":", l); } wrap.remove(); }
     if (ev.target.id==="cmDelete"){ if (confirm(`Delete ${c.name} and ALL their data? This cannot be undone. Export a backup first if unsure.`)){
       S.clients = S.clients.filter(x=>x.id!==c.id); save(); view={page:"roster",clientId:null,tab:"fatigue"}; render(); toast("Client deleted"); } wrap.remove(); }
   });
@@ -1529,6 +1572,24 @@ function syncWhoop(){
     .catch(e=>toast("Sync failed: " + e.message));
 }
 
+function clientLogLink(c){
+  if (!S.syncUrl) return null;
+  const base = location.origin + location.pathname.replace(/[^/]*$/, "");
+  return `${base}log.html?c=${encodeURIComponent(c.id)}&w=${encodeURIComponent(S.syncUrl.replace(/\/+$/,""))}`;
+}
+
+function fetchPending(){
+  if (!S.syncUrl || !S.syncKey) return;
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/pending?key=${encodeURIComponent(S.syncKey)}`)
+    .then(r=>r.json()).then(d=>{ if (!d.error){ pendingSubs = d.pending||[]; render(); } })
+    .catch(()=>{});
+}
+
+function ackSub(id, cb){
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/ack?key=${encodeURIComponent(S.syncKey)}&id=${encodeURIComponent(id)}`, {method:"POST"})
+    .then(r=>r.json()).then(()=>cb&&cb()).catch(()=>cb&&cb());
+}
+
 function whoopConnectLink(c){
   return S.syncUrl ? `${S.syncUrl.replace(/\/+$/,"")}/auth?client=${encodeURIComponent(c.id)}` : null;
 }
@@ -1560,12 +1621,21 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injci],[data-injclear],[data-injdel]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if (draft.length && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; chartSearch=""; render(); }
     else if (ds.bmv){ toast(ds.bmv); }
     else if (ds.crange){ chartRange = ds.crange; render(); }
+    else if (ds.subapprove!==undefined && ds.subapprove!==""){ const s=pendingSubs[+ds.subapprove]; const c=S.clients.find(x=>x.id===s.client); if(!c) return;
+      const { parsed } = E.parseSession(s.text, S.customExercises);
+      const items = parsed.map(p=>{ const m=exMuscles(p.name); return {...p, primary:m.p, secondary:m.s, sys:m.sys}; });
+      if (!items.length){ toast("Nothing to log in that submission"); return; }
+      const prMsg = applyParsedSession(c, items, s.date, s.title||"Solo session");
+      const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
+      ackSub(sid); render(); toast(`Logged for ${c.name}.${prMsg}`); }
+    else if (ds.subreject!==undefined && ds.subreject!==""){ const s=pendingSubs[+ds.subreject];
+      if (confirm("Reject and delete this submission?")){ const sid=s.id; pendingSubs=pendingSubs.filter(x=>x!==s); ackSub(sid); render(); toast("Rejected"); } }
     else if (ds.injmus){ injSel[ds.injmus] = !injSel[ds.injmus]; if(!injSel[ds.injmus]) delete injSel[ds.injmus]; render(); }
     else if (ds.injgrade){ injForm.grade = ds.injgrade; render(); }
     else if (ds.injci){ const c=client(); const i=c.injuries.find(x=>x.id===ds.injci); if(!i) return;
@@ -1624,6 +1694,7 @@ function bind(){
       else if (a==="add-client") addClient();
       else if (a==="save-rec") saveRecovery();
       else if (a==="whoop-sync") syncWhoop();
+      else if (a==="review"){ view={page:"review"}; render(); }
       else if (a==="add-injury"){ const c=client();
         const label = $("#injlabel").value.trim();
         const muscles = Object.keys(injSel);
