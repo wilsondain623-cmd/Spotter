@@ -100,6 +100,7 @@ textarea{min-height:92px;resize:vertical;line-height:1.45}
 </head>
 <body>
 <div id="app"></div>
+
 <script>
 /* ============================================================
    Spotter Engine v2 — Dwil Fitness
@@ -636,7 +637,7 @@ function seedState(){
 let S;
 try { S = JSON.parse(store.getItem(LS_KEY)) || seedState(); }
 catch(e){ S = seedState(); }
-function save(){ store.setItem(LS_KEY, JSON.stringify(S)); }
+function save(){ store.setItem(LS_KEY, JSON.stringify(S)); autoBackup(); }
 save();
 
 let view = { page:"roster", clientId:null, tab:"fatigue" };
@@ -774,10 +775,24 @@ function render(){
 function reviewView(){
   const subs = pendingSubs || [];
   if (!subs.length) return `<header><button class="backlink" data-act="back">‹ Roster</button><div class="word" style="margin-left:6px"><b>Review</b></div></header>
-    <div class="empty">No pending client workouts. Pull to refresh from the roster.</div>`;
+    <div class="empty">No pending client submissions.</div>
+    <button class="btn2" style="width:100%" data-act="refreshsubs">↻ Check again</button>`;
   const cards = subs.map((s,i)=>{
     const c = S.clients.find(x=>x.id===s.client);
     const name = c ? c.name : s.client;
+    if (s.kind === "recovery"){
+      const r = E.parseRecovery(s.text);
+      const RL = [["whoop","score"],["hrv","HRV"],["rhr","RHR"],["sleepH","sleep h"],["sleepQ","sleep q"],["feel","feel"],["steps","steps"]];
+      const chips = RL.filter(kv=>r[kv[0]]!=null).map(kv=>`<span class="chip" style="margin-right:6px;margin-bottom:4px;display:inline-block">${kv[1]} ${r[kv[0]]}</span>`).join("");
+      return `<div class="card">
+        <div class="row"><div class="grow"><div class="cname">♥ ${esc(name)} — recovery check-in${c?"":' <span style="color:#e0a86a;font-size:11px">(no matching client)</span>'}</div>
+        <div class="csub">${fmtDate(s.date)} · submitted ${fmtDate((s.submitted||"").slice(0,10))}</div></div></div>
+        <div style="margin-top:8px">${chips||`<div class="muted">Nothing recognized — raw text: ${esc(s.text)}</div>`}</div>
+        <div class="row" style="gap:8px;margin-top:10px">
+          ${c&&chips?`<button class="btn2 grow" data-subapprove="${i}">✓ Approve → log it</button>`:""}
+          <button class="btn2 grow" style="color:#e0a8a8" data-subreject="${i}">Reject</button>
+        </div></div>`;
+    }
     const { parsed, unmatched } = E.parseSession(s.text, S.customExercises);
     const exRows = parsed.map(p=>`<div class="pex" style="background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:7px 10px;margin-bottom:5px;font-size:13px">
       <b>${esc(p.name)}</b> <span style="color:var(--dim)">${p.setDetail?p.setDetail.map(x=>`${x.weight??"–"}×${x.reps||"?"}`).join(", "):`${p.sets}×${p.reps||"?"}${p.weight?" @ "+p.weight:""}`} · ${p.intensity}</span></div>`).join("");
@@ -815,7 +830,7 @@ function rosterView(){
   }).join("");
   const subBanner = (S.syncUrl && pendingSubs && pendingSubs.length)
     ? `<div class="card" style="border-color:#4D7DB4;cursor:pointer" data-act="review"><div class="row">
-        <div class="grow"><div class="cname" style="color:var(--ice)">📥 ${pendingSubs.length} client workout${pendingSubs.length>1?"s":""} to review</div>
+        <div class="grow"><div class="cname" style="color:var(--ice)">📥 ${pendingSubs.length} client submission${pendingSubs.length>1?"s":""} to review</div>
         <div class="csub">${[...new Set(pendingSubs.map(s=>{const c=S.clients.find(x=>x.id===s.client);return c?c.name:s.client;}))].join(", ")}</div></div>
         <span class="chip" style="color:var(--ice)">Review →</span></div></div>`
     : "";
@@ -823,9 +838,10 @@ function rosterView(){
     ${subBanner}${rows}
     <div class="row" style="gap:8px;margin-top:14px">
       <button class="btn" data-act="add-client">+ Add client</button>
+      ${S.syncUrl&&S.syncKey?`<button class="iconbtn" data-act="refreshsubs" title="Check for client submissions">↻</button>`:""}
       <button class="iconbtn" data-act="settings" title="Backup & data">⛭</button>
     </div>
-    <div class="footer-note">Data lives on this device — export a backup from ⛭ regularly.</div>`;
+    <div class="footer-note">${S.syncUrl&&S.syncKey?"Auto-backup to your sync server is on — restore anytime from ⛭.":"Data lives on this device — export a backup from ⛭ regularly."}</div>`;
 }
 
 function daysToReady(m, v, factor=1){
@@ -1476,10 +1492,18 @@ function settingsMenu(){
     <button class="btn2" style="width:100%;margin-top:8px" id="mImport">Import backup</button>
     <input type="file" id="mFile" accept=".json" style="display:none">
     <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
-      <h2 style="margin:0 0 8px">WHOOP sync (optional)</h2>
+      <h2 style="margin:0 0 8px">Sync server (client logs · backup · WHOOP)</h2>
       <input type="text" id="mSyncUrl" placeholder="Worker URL e.g. https://dwil-whoop-sync.you.workers.dev" value="${esc(S.syncUrl||"")}" style="margin-bottom:8px">
       <input type="text" id="mSyncKey" placeholder="APP_KEY (same as in Cloudflare)" value="${esc(S.syncKey||"")}">
       <button class="btn2" style="width:100%;margin-top:8px" id="mSyncSave">Save sync settings</button>
+    </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+      <h2 style="margin:0 0 8px">Cloud backup</h2>
+      <div class="muted" style="margin-bottom:8px">${(function(){ const ts=+(store.getItem("dwil-backup-ts")||0);
+        if (!S.syncUrl||!S.syncKey) return "Set the sync server above and your data backs up automatically about once a day.";
+        return ts ? "Last cloud backup: " + new Date(ts).toLocaleString() + " — runs automatically about once a day." : "No cloud backup yet — it runs automatically, or tap Back up now."; })()}</div>
+      <button class="btn2" style="width:100%" id="mBackupNow">Back up now</button>
+      <button class="btn2" style="width:100%;margin-top:8px" id="mRestore">Restore from cloud backup</button>
     </div>
     <button class="btn2" style="width:100%;margin-top:8px;color:#e0a8a8" id="mReset">Reset to original seed data</button>
     <div class="muted" style="margin-top:12px">Tip: export a backup after big logging days and drop it in your project folder — Claude can read it there too.</div>
@@ -1489,7 +1513,9 @@ function settingsMenu(){
     if (e.target===wrap) wrap.remove();
     if (e.target.id==="mExport") exportJSON();
     if (e.target.id==="mImport") wrap.querySelector("#mFile").click();
-    if (e.target.id==="mSyncSave"){ S.syncUrl = wrap.querySelector("#mSyncUrl").value.trim(); S.syncKey = wrap.querySelector("#mSyncKey").value.trim(); save(); syncExLib(); toast("Sync settings saved"); }
+    if (e.target.id==="mSyncSave"){ S.syncUrl = wrap.querySelector("#mSyncUrl").value.trim(); S.syncKey = wrap.querySelector("#mSyncKey").value.trim(); save(); syncExLib(); autoBackup(true); toast("Sync settings saved"); }
+    if (e.target.id==="mBackupNow") autoBackup(true);
+    if (e.target.id==="mRestore"){ wrap.remove(); restoreBackup(); }
     if (e.target.id==="mReset" && confirm("Replace ALL data with the original seed? Export first if unsure.")){ S=seedState(); save(); wrap.remove(); render(); }
   });
   wrap.querySelector("#mFile").addEventListener("change", e=>{ if(e.target.files[0]){ importJSON(e.target.files[0]); wrap.remove(); } });
@@ -1578,6 +1604,55 @@ function clientLogLink(c){
   return `${base}log.html?c=${encodeURIComponent(c.id)}&w=${encodeURIComponent(S.syncUrl.replace(/\/+$/,""))}`;
 }
 
+function approveSub(idx){
+  const s = pendingSubs[idx]; if (!s) return;
+  const c = S.clients.find(x=>x.id===s.client); if (!c) return;
+  if (s.kind === "recovery"){
+    const r = E.parseRecovery(s.text);
+    if (!Object.keys(r).length){ toast("Nothing recognized in that check-in"); return; }
+    c.recovery = c.recovery || [];
+    mergeRecovery(c, [{ date: s.date || todayISO(), ...r }]);
+    const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
+    ackSub(sid); render(); toast(`Recovery logged for ${c.name}`); return;
+  }
+  const { parsed } = E.parseSession(s.text, S.customExercises);
+  const items = parsed.map(p=>{ const m=exMuscles(p.name); return {...p, primary:m.p, secondary:m.s, sys:m.sys}; });
+  if (!items.length){ toast("Nothing to log in that submission"); return; }
+  const prMsg = applyParsedSession(c, items, s.date, s.title||"Solo session");
+  const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
+  ackSub(sid); render(); toast(`Logged for ${c.name}.${prMsg}`);
+}
+function rejectSub(idx){
+  const s = pendingSubs[idx]; if (!s) return;
+  if (confirm("Reject and delete this submission?")){ const sid=s.id; pendingSubs=pendingSubs.filter(x=>x!==s); ackSub(sid); render(); toast("Rejected"); }
+}
+
+let _backupBusy = false;
+function autoBackup(force){
+  if (!S.syncUrl || !S.syncKey || _backupBusy) return;
+  const last = +(store.getItem("dwil-backup-ts")||0);
+  if (!force && Date.now() - last < 20*3600*1000) return;
+  _backupBusy = true;
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/backup?key=${encodeURIComponent(S.syncKey)}`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ saved: new Date().toISOString(), state: S })
+  }).then(r=>r.json()).then(d=>{
+    _backupBusy = false;
+    if (d && d.ok){ store.setItem("dwil-backup-ts", String(Date.now())); if (force) toast("Cloud backup saved"); }
+    else if (force) toast("Backup failed: " + ((d&&d.error)||"unknown"));
+  }).catch(()=>{ _backupBusy = false; if (force) toast("Backup failed — network"); });
+}
+function restoreBackup(){
+  if (!S.syncUrl || !S.syncKey){ toast("Set the sync server in ⛭ first"); return; }
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/backup?key=${encodeURIComponent(S.syncKey)}`)
+    .then(r=>r.json()).then(d=>{
+      if (!d || d.error || !d.state){ toast("No cloud backup found yet"); return; }
+      const when = String(d.saved||"").replace("T"," ").slice(0,16);
+      if (!confirm(`Replace ALL data on this device with the cloud backup from ${when}?`)) return;
+      S = d.state; store.setItem(LS_KEY, JSON.stringify(S)); render(); toast("Restored from cloud backup");
+    }).catch(()=>toast("Could not reach the backup server"));
+}
+
 function fetchPending(){
   if (!S.syncUrl || !S.syncKey) return;
   fetch(`${S.syncUrl.replace(/\/+$/,"")}/pending?key=${encodeURIComponent(S.syncKey)}`)
@@ -1635,15 +1710,8 @@ function bind(){
     if (ds.open){ if (draft.length && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; chartSearch=""; render(); }
     else if (ds.bmv){ toast(ds.bmv); }
     else if (ds.crange){ chartRange = ds.crange; render(); }
-    else if (ds.subapprove!==undefined && ds.subapprove!==""){ const s=pendingSubs[+ds.subapprove]; const c=S.clients.find(x=>x.id===s.client); if(!c) return;
-      const { parsed } = E.parseSession(s.text, S.customExercises);
-      const items = parsed.map(p=>{ const m=exMuscles(p.name); return {...p, primary:m.p, secondary:m.s, sys:m.sys}; });
-      if (!items.length){ toast("Nothing to log in that submission"); return; }
-      const prMsg = applyParsedSession(c, items, s.date, s.title||"Solo session");
-      const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
-      ackSub(sid); render(); toast(`Logged for ${c.name}.${prMsg}`); }
-    else if (ds.subreject!==undefined && ds.subreject!==""){ const s=pendingSubs[+ds.subreject];
-      if (confirm("Reject and delete this submission?")){ const sid=s.id; pendingSubs=pendingSubs.filter(x=>x!==s); ackSub(sid); render(); toast("Rejected"); } }
+    else if (ds.subapprove!==undefined && ds.subapprove!=="") approveSub(+ds.subapprove);
+    else if (ds.subreject!==undefined && ds.subreject!=="") rejectSub(+ds.subreject);
     else if (ds.injmus){ injSel[ds.injmus] = !injSel[ds.injmus]; if(!injSel[ds.injmus]) delete injSel[ds.injmus]; render(); }
     else if (ds.injgrade){ injForm.grade = ds.injgrade; render(); }
     else if (ds.injci){ const c=client(); const i=c.injuries.find(x=>x.id===ds.injci); if(!i) return;
@@ -1703,6 +1771,7 @@ function bind(){
       else if (a==="save-rec") saveRecovery();
       else if (a==="whoop-sync") syncWhoop();
       else if (a==="review"){ view={page:"review"}; render(); }
+      else if (a==="refreshsubs"){ toast("Checking for submissions…"); fetchPending(); }
       else if (a==="add-injury"){ const c=client();
         const label = $("#injlabel").value.trim();
         const muscles = Object.keys(injSel);

@@ -421,6 +421,7 @@ const crescent = `<svg class="crescent" viewBox="0 0 100 100"><defs><linearGradi
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const todayISO = () => { const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
 let submitted = false;
+let recSent = false;
 
 function preview(text){
   if (!text.trim()) return "";
@@ -429,6 +430,25 @@ function preview(text){
   const rows = parsed.map(p=>`<div class="pex"><div class="n">${esc(p.name)}</div><div class="m">${p.setDetail?p.setDetail.map(s=>`${s.weight??"–"}×${s.reps||"?"}`).join(", "):`${p.sets}×${p.reps||"?"}${p.weight?" @ "+p.weight:""}`} · ${p.intensity}</div></div>`).join("");
   const unk = unmatched.map(u=>`<div class="pex unk"><div class="n">? ${esc(u.raw)}</div><div class="m">your coach will sort this one out</div></div>`).join("");
   return `<div class="prev"><div class="muted" style="margin-bottom:6px">Preview — this is what your coach receives:</div>${rows}${unk}</div>`;
+}
+
+function recPreview(text){
+  if (!text.trim()) return "";
+  const r = E.parseRecovery(text);
+  const RL = [["whoop","score"],["hrv","HRV"],["rhr","RHR"],["sleepH","sleep h"],["sleepQ","sleep q"],["feel","feel"],["steps","steps"]];
+  const chips = RL.filter(kv=>r[kv[0]]!=null).map(kv=>`<span style="display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:20px;padding:3px 10px;font-size:12px;margin:6px 6px 0 0">${kv[1]} <b>${r[kv[0]]}</b></span>`).join("");
+  return chips || `<div class="muted" style="margin-top:8px">Nothing recognized yet — include a score like "whoop 72" or "body battery 60".</div>`;
+}
+
+function recCard(){
+  if (recSent) return `<div class="card done" style="padding:18px"><div style="font-size:24px">✓</div><div class="sub" style="margin-top:4px">Check-in sent — thanks!</div></div>`;
+  const rt = (app.querySelector("#rt")||{}).value || "";
+  return `<div class="card"><h1 style="font-size:16px">Morning check-in <span style="color:var(--dim);font-weight:400;font-size:12px">(optional)</span></h1>
+    <div class="sub">Wear a tracker? Send today\u2019s numbers so recovery counts in your training.</div>
+    <label>Recovery</label><input type="text" id="rt" placeholder="e.g. whoop 72, slept 7.5h, feel 4 — or garmin body battery 60" value="${esc(rt)}">
+    <div id="rprev">${recPreview(rt)}</div>
+    <button class="btn" id="sendrec" style="margin-top:12px">Send check-in</button>
+  </div>`;
 }
 
 function render(){
@@ -454,12 +474,19 @@ function render(){
       <label>Session name (optional)</label><input type="text" id="ti" placeholder="e.g. Push day">
       <button class="btn" id="send" style="margin-top:14px">Send to coach</button>
       <div class="muted" style="margin-top:10px">Works with anything — bodyweight, machines, cardio. Not sure of a name? Just write it, your coach handles the rest.</div>
-    </div>`;
+    </div>
+    ${recCard()}`;
   const ta = app.querySelector("#t");
   const pv = app.querySelector("#prev");
   pv.innerHTML = preview(t);
   ta.addEventListener("input", ()=>{ pv.innerHTML = preview(ta.value); });
   app.querySelector("#send").addEventListener("click", send);
+  const rta = app.querySelector("#rt");
+  if (rta){
+    const rpv = app.querySelector("#rprev");
+    rta.addEventListener("input", ()=>{ rpv.innerHTML = recPreview(rta.value); });
+    app.querySelector("#sendrec").addEventListener("click", sendRec);
+  }
 }
 
 function send(){
@@ -476,6 +503,19 @@ function send(){
     else { btn.disabled=false; btn.textContent="Send to coach"; alert("Couldn't send: "+(d.error||"try again")); }
   }).catch(e=>{ btn.disabled=false; btn.textContent="Send to coach"; alert("Network error — check your connection and retry."); });
 }
+function sendRec(){
+  const text = app.querySelector("#rt").value.trim();
+  if (!text){ alert("Type your recovery numbers first"); return; }
+  const btn = app.querySelector("#sendrec"); btn.disabled = true; btn.textContent = "Sending…";
+  fetch(`${worker}/submit?c=${encodeURIComponent(client)}`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ kind:"recovery", date: todayISO(), text })
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok){ recSent = true; render(); }
+    else { btn.disabled=false; btn.textContent="Send check-in"; alert("Could not send: "+(d.error||"try again")); }
+  }).catch(()=>{ btn.disabled=false; btn.textContent="Send check-in"; alert("Network error — check your connection and retry."); });
+}
+
 if (worker){
   fetch(worker + "/exlib").then(r=>r.json()).then(d=>{ if (Array.isArray(d)) { customLib = d; render(); } }).catch(()=>{});
 }
