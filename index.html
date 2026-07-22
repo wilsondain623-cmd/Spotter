@@ -1442,7 +1442,7 @@ function confirmAssign(){
     ? existing
     : { name, aliases:[E.normalize(name)], p, s };
   if (ex !== existing){ S.customExercises.push(ex); }
-  save();
+  save(); syncExLib();
   const item = { name, primary:p, secondary:s, sets:it.setDetail?it.setDetail.length:(it.sets||3),
     reps:it.reps||"", weight:it.weight??null, intensity:it.intensity||"moderate",
     ...(it.setDetail?{setDetail:it.setDetail}:{}), raw:it.raw };
@@ -1489,7 +1489,7 @@ function settingsMenu(){
     if (e.target===wrap) wrap.remove();
     if (e.target.id==="mExport") exportJSON();
     if (e.target.id==="mImport") wrap.querySelector("#mFile").click();
-    if (e.target.id==="mSyncSave"){ S.syncUrl = wrap.querySelector("#mSyncUrl").value.trim(); S.syncKey = wrap.querySelector("#mSyncKey").value.trim(); save(); toast("Sync settings saved"); }
+    if (e.target.id==="mSyncSave"){ S.syncUrl = wrap.querySelector("#mSyncUrl").value.trim(); S.syncKey = wrap.querySelector("#mSyncKey").value.trim(); save(); syncExLib(); toast("Sync settings saved"); }
     if (e.target.id==="mReset" && confirm("Replace ALL data with the original seed? Export first if unsure.")){ S=seedState(); save(); wrap.remove(); render(); }
   });
   wrap.querySelector("#mFile").addEventListener("change", e=>{ if(e.target.files[0]){ importJSON(e.target.files[0]); wrap.remove(); } });
@@ -1583,6 +1583,14 @@ function fetchPending(){
   fetch(`${S.syncUrl.replace(/\/+$/,"")}/pending?key=${encodeURIComponent(S.syncKey)}`)
     .then(r=>r.json()).then(d=>{ if (!d.error){ pendingSubs = d.pending||[]; render(); } })
     .catch(()=>{});
+}
+
+function syncExLib(){
+  if (!S.syncUrl || !S.syncKey) return;
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/exlib?key=${encodeURIComponent(S.syncKey)}`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ exercises: S.customExercises || [] })
+  }).catch(()=>{});
 }
 
 function ackSub(id, cb){

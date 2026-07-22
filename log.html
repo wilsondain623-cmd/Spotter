@@ -415,6 +415,7 @@ const E = window.Engine;
 const qs = new URLSearchParams(location.search);
 const client = qs.get("c") || "";
 const worker = (qs.get("w") || "").replace(/\/+$/,"");
+let customLib = [];
 const app = document.getElementById("app");
 const crescent = `<svg class="crescent" viewBox="0 0 100 100"><defs><linearGradient id="cg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4D7DB4"/><stop offset="1" stop-color="#A8C4E0"/></linearGradient></defs><path d="M62 8 A46 46 0 0 0 62 92 A54 54 0 0 1 62 8 Z" fill="url(#cg)"/></svg>`;
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -423,7 +424,7 @@ let submitted = false;
 
 function preview(text){
   if (!text.trim()) return "";
-  const { parsed, unmatched } = E.parseSession(text, []);
+  const { parsed, unmatched } = E.parseSession(text, customLib);
   if (!parsed.length && !unmatched.length) return `<div class="muted" style="margin-top:10px">Nothing recognized yet — try "bench 4x8 at 185, incline press 3x10".</div>`;
   const rows = parsed.map(p=>`<div class="pex"><div class="n">${esc(p.name)}</div><div class="m">${p.setDetail?p.setDetail.map(s=>`${s.weight??"–"}×${s.reps||"?"}`).join(", "):`${p.sets}×${p.reps||"?"}${p.weight?" @ "+p.weight:""}`} · ${p.intensity}</div></div>`).join("");
   const unk = unmatched.map(u=>`<div class="pex unk"><div class="n">? ${esc(u.raw)}</div><div class="m">your coach will sort this one out</div></div>`).join("");
@@ -474,6 +475,9 @@ function send(){
     if (d.ok){ submitted = true; render(); }
     else { btn.disabled=false; btn.textContent="Send to coach"; alert("Couldn't send: "+(d.error||"try again")); }
   }).catch(e=>{ btn.disabled=false; btn.textContent="Send to coach"; alert("Network error — check your connection and retry."); });
+}
+if (worker){
+  fetch(worker + "/exlib").then(r=>r.json()).then(d=>{ if (Array.isArray(d)) { customLib = d; render(); } }).catch(()=>{});
 }
 render();
 </script>
