@@ -422,6 +422,7 @@ const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">"
 const todayISO = () => { const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
 let submitted = false;
 let recSent = false;
+let phSent = false;
 
 function preview(text){
   if (!text.trim()) return "";
@@ -451,6 +452,14 @@ function recCard(){
   </div>`;
 }
 
+function photoCard(){
+  if (phSent) return `<div class="card done" style="padding:18px"><div style="font-size:24px">✓</div><div class="sub" style="margin-top:4px">Photo check-in sent — nice consistency!</div></div>`;
+  return `<div class="card"><h1 style="font-size:16px">Progress photos <span style="color:var(--dim);font-weight:400;font-size:12px">(monthly habit)</span></h1>
+    <div class="sub">Photos beat the scale — same spot, same light, roughly once a month. They stay on your phone; this just tells your coach you took them.</div>
+    <button class="btn" id="sendphoto" style="margin-top:12px">✓ I took progress photos today</button>
+  </div>`;
+}
+
 function render(){
   if (submitted){
     app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>
@@ -475,7 +484,8 @@ function render(){
       <button class="btn" id="send" style="margin-top:14px">Send to coach</button>
       <div class="muted" style="margin-top:10px">Works with anything — bodyweight, machines, cardio. Not sure of a name? Just write it, your coach handles the rest.</div>
     </div>
-    ${recCard()}`;
+    ${recCard()}
+    ${photoCard()}`;
   const ta = app.querySelector("#t");
   const pv = app.querySelector("#prev");
   pv.innerHTML = preview(t);
@@ -487,6 +497,8 @@ function render(){
     rta.addEventListener("input", ()=>{ rpv.innerHTML = recPreview(rta.value); });
     app.querySelector("#sendrec").addEventListener("click", sendRec);
   }
+  const phb = app.querySelector("#sendphoto");
+  if (phb) phb.addEventListener("click", sendPhoto);
 }
 
 function send(){
@@ -503,6 +515,17 @@ function send(){
     else { btn.disabled=false; btn.textContent="Send to coach"; alert("Couldn't send: "+(d.error||"try again")); }
   }).catch(e=>{ btn.disabled=false; btn.textContent="Send to coach"; alert("Network error — check your connection and retry."); });
 }
+function sendPhoto(){
+  const btn = app.querySelector("#sendphoto"); btn.disabled = true; btn.textContent = "Sending…";
+  fetch(`${worker}/submit?c=${encodeURIComponent(client)}`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ kind:"photo", date: todayISO(), text: "progress photos taken" })
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok){ phSent = true; render(); }
+    else { btn.disabled=false; btn.textContent="✓ I took progress photos today"; alert("Could not send: "+(d.error||"try again")); }
+  }).catch(()=>{ btn.disabled=false; btn.textContent="✓ I took progress photos today"; alert("Network error — check your connection and retry."); });
+}
+
 function sendRec(){
   const text = app.querySelector("#rt").value.trim();
   if (!text){ alert("Type your recovery numbers first"); return; }

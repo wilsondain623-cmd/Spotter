@@ -698,7 +698,23 @@ const INJURY_REFS = {
   other:        { label:"Other",          g:{ "1":[14,28], "2":[14,28], "3":[14,28] } },
 };
 function activeInjuries(c){ return (c.injuries||[]).filter(i=>i.status!=="cleared"); }
-function injuredMuscles(c){ const s=new Set(); for (const i of activeInjuries(c)) for (const m of i.muscles||[]) s.add(m); return s; }
+function chronicHot(i){ const ci = lastCheckIn(i); return !!ci && ci.pain >= 4 && E.daysBetween(ci.date, todayISO()) <= 7; }
+function flaggedInjuries(c){ return activeInjuries(c).filter(i => !i.chronic || chronicHot(i)); }
+function injuredMuscles(c){ const s=new Set(); for (const i of flaggedInjuries(c)) for (const m of i.muscles||[]) s.add(m); return s; }
+function packUsed(c){ const p=c.pay; if (!p||p.type!=="pack"||!p.started) return 0; return c.sessions.filter(s=>!s.solo && s.date>=p.started).length; }
+function weekSessions(c){ const cut = new Date(Date.now()-7*86400000); const cutISO = cut.getFullYear()+"-"+String(cut.getMonth()+1).padStart(2,"0")+"-"+String(cut.getDate()).padStart(2,"0"); return c.sessions.filter(s=>!s.solo && s.date>cutISO).length; }
+function payBrief(c){
+  const p = c.pay; if (!p || !p.type || p.type==="none") return "";
+  if (p.type==="pack"){ const used=packUsed(c), size=p.size||10, left=Math.max(0,size-used);
+    return `<div style="margin-top:6px"><span class="bb">Sessions:</span> ${used} of ${size} used${left<=2?` — <span style="color:${left===0?"#c95f5f":"#d4a04d"};font-weight:800">${left} left, time to renew</span>`:` (${left} left)`}</div>`; }
+  const wk = weekSessions(c);
+  return `<div style="margin-top:6px"><span class="bb">This week:</span> ${wk} session${wk===1?"":"s"}${p.weekly?` · target ${p.weekly}/wk`:""}</div>`;
+}
+function photoBrief(c){
+  const log = c.photoLog||[]; if (!log.length) return "";
+  const d = E.daysBetween(log[log.length-1], todayISO());
+  return `<div style="margin-top:6px"><span class="bb">Progress photos:</span> last ${d===0?"today":d+" days ago"}${d>=30?' — <span style="color:#d4a04d;font-weight:700">due</span>':""}</div>`;
+}
 function injDay(i){ return E.daysBetween(i.onset, todayISO()) + 1; }
 function lastCheckIn(i){ return (i.checkIns&&i.checkIns.length) ? i.checkIns[i.checkIns.length-1] : null; }
 function readyWord(score){ return score>=67?"ready":score>=34?"caution":"compromised"; }
@@ -781,6 +797,15 @@ function reviewView(){
   const cards = subs.map((s,i)=>{
     const c = S.clients.find(x=>x.id===s.client);
     const name = c ? c.name : s.client;
+    if (s.kind === "photo"){
+      return `<div class="card">
+        <div class="row"><div class="grow"><div class="cname">📸 ${esc(name)} — progress photos taken</div>
+        <div class="csub">${fmtDate(s.date)} · submitted ${fmtDate((s.submitted||"").slice(0,10))}</div></div></div>
+        <div class="row" style="gap:8px;margin-top:10px">
+          ${c?`<button class="btn2 grow" data-subapprove="${i}">✓ Log it</button>`:""}
+          <button class="btn2 grow" style="color:#e0a8a8" data-subreject="${i}">Reject</button>
+        </div></div>`;
+    }
     if (s.kind === "recovery"){
       const r = E.parseRecovery(s.text);
       const RL = [["whoop","score"],["hrv","HRV"],["rhr","RHR"],["sleepH","sleep h"],["sleepQ","sleep q"],["feel","feel"],["steps","steps"]];
@@ -822,12 +847,15 @@ function rosterView(){
       : (b.recovering.length
         ? `<span class="chip hot">${b.recovering[0]} ${E.round1(b.current[b.recovering[0]])}</span>`
         : `<span class="chip fresh">fresh</span>`);
-    const injN = activeInjuries(c).length;
+    const injN = flaggedInjuries(c).length;
+    let payChip = "";
+    if (c.pay && c.pay.type==="pack" && c.pay.started){ const left = Math.max(0,(c.pay.size||10)-packUsed(c));
+      if (left<=2) payChip = `<span class="chip" style="color:${left===0?"#c95f5f":"#d4a04d"};border-color:#d4a04d55">${left} left</span>`; }
     return `<div class="card row" data-open="${c.id}" style="cursor:pointer">
       <div class="avatar">${esc(c.name[0])}</div>
       <div class="grow"><div class="cname">${esc(c.name)}</div>
       <div class="csub">${last===null?"no sessions logged":last===0?"trained today":last+" days since last session"}</div></div>
-      ${injN?`<span class="chip" style="color:#e3c8ec;border-color:${INJ_COLOR}66">⚠ ${injN}</span>`:""}${status}</div>`;
+      ${injN?`<span class="chip" style="color:#e3c8ec;border-color:${INJ_COLOR}66">⚠ ${injN}</span>`:""}${payChip}${status}</div>`;
   }).join("");
   const subBanner = (S.syncUrl && pendingSubs && pendingSubs.length)
     ? `<div class="card" style="border-color:#4D7DB4;cursor:pointer" data-act="review"><div class="row">
@@ -1002,6 +1030,7 @@ function tabBrief(c){
   const injs = activeInjuries(c);
   const injBlock = injs.length ? `<div class="card" style="border-color:${INJ_COLOR}66">${injs.map(i=>{
     const ci = lastCheckIn(i);
+    if (i.chronic) return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">∞ ${esc(i.label)} — chronic${ci?` · pain ${ci.pain}/10 (${fmtDate(ci.date)})`:" · no check-ins yet"}${chronicHot(i)?' · <span style="color:#e0a8a8">flared — keep loading gentle</span>':""}</div>`;
     return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}${ci?` · pain ${ci.pain}/10 (${fmtDate(ci.date)})`:" · no check-ins yet"}</div>`;
   }).join("")}</div>` : "";
   return `${injBlock}${flagsBlock(c)}<div class="card brief-box">
@@ -1011,6 +1040,7 @@ function tabBrief(c){
     <div style="margin-top:6px"><span class="bb">Systemic load:</span> ${E.round1(E.decaySys(c.sysFatigue||0, b.daysSince))} / 10 (${sysWord(E.decaySys(c.sysFatigue||0, b.daysSince))})${E.decaySys(c.sysFatigue||0, b.daysSince)>6.5?" — consider a lighter day regardless of what looks fresh":""}</div>
     ${rr&&rr.score!=null&&!rr.stale?`<div style="margin-top:6px"><span class="bb">Readiness:</span> <span style="color:${readyColor(rr.score)};font-weight:800">${rr.score}</span> / 100 (${readyWord(rr.score)})</div>`:""}
     <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">${(rr&&rr.score!=null&&!rr.stale&&rr.score<34)?`<span style="color:#e0a8a8;font-weight:700">Readiness is low (${rr.score}) — recovery is impaired; keep today light regardless of what looks fresh.</span><br>`:""}${esc(b.suggestion)}</div>
+    ${payBrief(c)}${photoBrief(c)}
     ${c.nextPlan?`<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px"><span class="bb">Planned:</span> ${esc(c.nextPlan)}</div>`:""}
   </div>${volumeCard(c)}`;
 }
@@ -1213,7 +1243,7 @@ function recTrendChart(c){
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block;margin-top:8px">${out}</svg>`;
 }
 
-let injForm = { type:"strain", grade:"1" };
+let injForm = { type:"strain", grade:"1", chronic:false };
 let injSel = {};
 
 function injRefDays(){ const r = INJURY_REFS[injForm.type]||INJURY_REFS.other; return r.g[injForm.grade]||r.g["1"]; }
@@ -1222,6 +1252,39 @@ function tabInjuries(c){
   const act = activeInjuries(c);
   const cleared = (c.injuries||[]).filter(i=>i.status==="cleared");
   const cards = act.map(i=>{
+    if (i.chronic){
+      const ci = lastCheckIn(i);
+      const stale = ci ? E.daysBetween(ci.date, todayISO()) > 7 : true;
+      const pains = (i.checkIns||[]).slice(-12).map(x=>x.pain);
+      const spark = pains.length > 1 ? `<svg viewBox="0 0 120 26" style="width:120px;height:26px">${pains.map((p,j)=>{
+          const x = 6 + 108*j/(pains.length-1), y = 22 - 18*p/10;
+          return (j?`<line x1="${6+108*(j-1)/(pains.length-1)}" y1="${22-18*pains[j-1]/10}" x2="${x}" y2="${y}" stroke="${INJ_COLOR}" stroke-width="1.5"/>`:"")+`<circle cx="${x}" cy="${y}" r="2" fill="#e3c8ec"/>`;
+        }).join("")}</svg>` : "";
+      const avg = a => a.length ? Math.round(10*a.reduce((s,v)=>s+v,0)/a.length)/10 : null;
+      const a30 = avg((i.checkIns||[]).filter(x=>E.daysBetween(x.date,todayISO())<=30).map(x=>x.pain));
+      const a60 = avg((i.checkIns||[]).filter(x=>{const d=E.daysBetween(x.date,todayISO());return d>30&&d<=60;}).map(x=>x.pain));
+      const trend = (a30!=null&&a60!=null) ? (a30<a60?` · <span style="color:#5fb48a">improving (${a60} → ${a30})</span>`:a30>a60?` · <span style="color:#e0a8a8">worsening (${a60} → ${a30})</span>`:" · steady") : "";
+      return `<div class="card" style="border-color:${INJ_COLOR}66">
+        <div class="row"><div class="grow">
+          <div class="d-name" style="color:#e3c8ec">∞ ${esc(i.label)} <span style="font-size:11px;color:#8b93a5;font-weight:400">chronic</span></div>
+          <div class="d-meta">${(i.muscles||[]).join(", ")} · tracking since ${fmtDate(i.onset)}</div>
+        </div><button class="btn-x" data-injdel="${i.id}">✕</button></div>
+        <div class="row" style="margin-top:8px;gap:8px">
+          <div class="grow">${ci?`<span style="font-size:12px;color:#CFD3DC">Last check-in ${fmtDate(ci.date)} · pain ${ci.pain}/10${ci.note?" · "+esc(ci.note):""}</span>`:`<span style="font-size:12px;color:#8b93a5">No check-ins yet</span>`}
+          ${a30!=null?`<span style="font-size:11px;color:#8b93a5"> · 30d avg ${a30}${trend}</span>`:""}
+          ${stale?`<span style="color:#e0a86a;font-size:11px;font-weight:700"> · check-in due</span>`:""}</div>
+          ${spark}
+        </div>
+        ${chronicHot(i)?`<div style="margin-top:6px;font-size:12px;color:#e0a8a8;font-weight:700">Recent pain is high — drafts loading this area will warn until it settles.</div>`:""}
+        <div class="minirow">
+          <span class="lbl">pain</span><input type="number" inputmode="numeric" min="0" max="10" style="width:58px" id="pain-${i.id}">
+          <input type="text" style="flex:1" id="cinote-${i.id}" placeholder="note (optional)">
+          <button class="btn-sm" data-injci="${i.id}">Check in</button>
+        </div>
+        <button class="btn2" style="width:100%;margin-top:8px" data-injclear="${i.id}">Mark resolved ✓</button>
+        <div class="muted" style="margin-top:6px;font-size:10px">Chronic tracking — no recovery window. Check in whenever it flares or settles.</div>
+      </div>`;
+    }
     const day = injDay(i), pct = Math.min(100, Math.round(day / i.expHi * 100));
     const inWindow = day >= i.expLo;
     const ci = lastCheckIn(i);
@@ -1267,13 +1330,13 @@ function tabInjuries(c){
   <div class="card"><h2 style="margin-top:0">Log an injury</h2>
     <input type="text" id="injlabel" placeholder="e.g. Right oblique strain">
     <div class="minirow"><span class="lbl">Type</span><select id="injtype">${typeOpts}</select></div>
-    <div class="ichips" style="margin-top:8px">${gradeChips}</div>
+    <div class="ichips" style="margin-top:8px">${gradeChips}<span class="ichip ${injForm.chronic?"on":""}" data-injchronic="1">∞ chronic / recurring</span></div>
     <div class="muted" style="margin:8px 0 4px;font-size:11px">Affected muscle groups (tap):</div>
     <div class="mgrid">${grid}</div>
     <div class="minirow"><span class="lbl">Onset</span><input type="date" id="injonset" value="${todayISO()}"></div>
-    <div class="minirow"><span class="lbl">Typical</span>
+    ${injForm.chronic?`<div class="muted" style="margin:6px 0;font-size:11px">Chronic mode — no recovery window. It warns on loading drafts only when the latest pain check-in (within 7 days) is 4+/10.</div>`:`<div class="minirow"><span class="lbl">Typical</span>
       <input type="number" style="width:64px" id="injlo" value="${lo}"> <span class="lbl">to</span>
-      <input type="number" style="width:64px" id="injhi" value="${hi}"> <span class="lbl">days (editable)</span></div>
+      <input type="number" style="width:64px" id="injhi" value="${hi}"> <span class="lbl">days (editable)</span></div>`}
     <button class="btn" style="margin-top:10px" data-act="add-injury">Add injury</button>
   </div>${clearedHtml}`;
 }
@@ -1421,9 +1484,9 @@ function rebuildClient(c){
 }
 
 /* Save a parsed session for a specific client (used by log tab + client-submission review) */
-function applyParsedSession(c, items, date, title){
+function applyParsedSession(c, items, date, title, solo){
   const before = {}; for (const p of c.prs) before[p.exercise] = p.weight;
-  c.sessions.push({ date, title: title||"Session", exercises: items.map(({name,sets,reps,weight,intensity,setDetail})=>({name,sets,reps,weight,intensity,...(setDetail?{setDetail}:{})})) });
+  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail})=>({name,sets,reps,weight,intensity,...(setDetail?{setDetail}:{})})) });
   c.sessions.sort((a,b)=>b.date.localeCompare(a.date));
   rebuildClient(c);
   let prMsg = "";
@@ -1521,6 +1584,36 @@ function settingsMenu(){
   });
   wrap.querySelector("#mFile").addEventListener("change", e=>{ if(e.target.files[0]){ importJSON(e.target.files[0]); wrap.remove(); } });
 }
+function payMenu(c){
+  const p = c.pay || { type:"none" };
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  wrap.innerHTML = `<div class="modal">
+    <h2 style="margin-top:0">${esc(c.name)} — payment & sessions</h2>
+    <div class="minirow"><span class="lbl">Type</span><select id="payType">
+      <option value="none" ${!p.type||p.type==="none"?"selected":""}>Not tracked</option>
+      <option value="pack" ${p.type==="pack"?"selected":""}>Session pack</option>
+      <option value="monthly" ${p.type==="monthly"?"selected":""}>Monthly / weekly rate</option></select></div>
+    <div class="minirow"><span class="lbl">Pack size</span><input type="number" id="paySize" style="width:70px" value="${p.size||10}"></div>
+    <div class="minirow"><span class="lbl">Started</span><input type="date" id="payStart" value="${p.started||todayISO()}"></div>
+    <div class="minirow"><span class="lbl">Target /wk</span><input type="number" id="payWeekly" style="width:70px" value="${p.weekly||2}"></div>
+    <div class="muted" style="margin-top:8px">Packs count trainer-logged sessions on/after the start date — solo workouts never count.${p.type==="pack"&&p.started?` Currently ${packUsed(c)} of ${p.size||10} used.`:""}</div>
+    <button class="btn" style="width:100%;margin-top:10px" id="paySave">Save</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="payNew">Start a new pack today</button>
+  </div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", ev=>{
+    if (ev.target===wrap) wrap.remove();
+    if (ev.target.id==="paySave"){
+      c.pay = { type: wrap.querySelector("#payType").value, size:+wrap.querySelector("#paySize").value||10,
+        started: wrap.querySelector("#payStart").value||todayISO(), weekly:+wrap.querySelector("#payWeekly").value||0 };
+      save(); render(); toast("Payment settings saved"); wrap.remove(); }
+    if (ev.target.id==="payNew"){
+      c.pay = { type:"pack", size:+wrap.querySelector("#paySize").value||10, started: todayISO(), weekly:+wrap.querySelector("#payWeekly").value||0 };
+      save(); render(); toast("New pack started today"); wrap.remove(); }
+  });
+}
+
 function clientMenu(){
   const c = client(); if (!c) return;
   const wrap = document.createElement("div");
@@ -1528,6 +1621,8 @@ function clientMenu(){
   wrap.innerHTML = `<div class="modal">
     <h2 style="margin-top:0">${esc(c.name)}</h2>
     <button class="btn2" style="width:100%" id="cmProfile">Edit profile / goals / injuries</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="cmPhoto">📸 Log progress photos today</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="cmPay">Payment & sessions…</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmRename">Rename client</button>
     ${S.syncUrl?`<button class="btn2" style="width:100%;margin-top:8px" id="cmLogLink">Copy solo-log link</button>`:""}
     <button class="btn2" style="width:100%;margin-top:8px;color:#e0a8a8" id="cmDelete">Delete client…</button>
@@ -1536,6 +1631,8 @@ function clientMenu(){
   wrap.addEventListener("click", ev=>{
     if (ev.target===wrap) wrap.remove();
     if (ev.target.id==="cmProfile"){ const p = prompt("Profile / goals / injury notes:", c.profile||""); if (p!==null){ c.profile=p.trim(); save(); render(); } wrap.remove(); }
+    if (ev.target.id==="cmPhoto"){ c.photoLog=c.photoLog||[]; if (!c.photoLog.includes(todayISO())){ c.photoLog.push(todayISO()); c.photoLog.sort(); save(); render(); toast("Progress photos logged for today"); } else toast("Already logged today"); wrap.remove(); }
+    if (ev.target.id==="cmPay"){ wrap.remove(); payMenu(c); }
     if (ev.target.id==="cmRename"){ const n = prompt("New name:", c.name); if (n && n.trim()){ c.name=n.trim(); save(); render(); } wrap.remove(); }
     if (ev.target.id==="cmLogLink"){ const l = clientLogLink(c); if (l){ if (navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Solo-log link copied — text it to "+c.name)).catch(()=>prompt("Send this to "+c.name+":", l)); else prompt("Send this to "+c.name+":", l); } wrap.remove(); }
     if (ev.target.id==="cmDelete"){ if (confirm(`Delete ${c.name} and ALL their data? This cannot be undone. Export a backup first if unsure.`)){
@@ -1608,6 +1705,13 @@ function clientLogLink(c){
 function approveSub(idx){
   const s = pendingSubs[idx]; if (!s) return;
   const c = S.clients.find(x=>x.id===s.client); if (!c) return;
+  if (s.kind === "photo"){
+    c.photoLog = c.photoLog || [];
+    const d = s.date || todayISO();
+    if (!c.photoLog.includes(d)){ c.photoLog.push(d); c.photoLog.sort(); }
+    const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
+    ackSub(sid); render(); toast(`Progress photos logged for ${c.name}`); return;
+  }
   if (s.kind === "recovery"){
     const r = E.parseRecovery(s.text);
     if (!Object.keys(r).length){ toast("Nothing recognized in that check-in"); return; }
@@ -1619,7 +1723,7 @@ function approveSub(idx){
   const { parsed } = E.parseSession(s.text, S.customExercises);
   const items = parsed.map(p=>{ const m=exMuscles(p.name); return {...p, primary:m.p, secondary:m.s, sys:m.sys}; });
   if (!items.length){ toast("Nothing to log in that submission"); return; }
-  const prMsg = applyParsedSession(c, items, s.date, s.title||"Solo session");
+  const prMsg = applyParsedSession(c, items, s.date, s.title||"Solo session", true);
   const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
   ackSub(sid); render(); toast(`Logged for ${c.name}.${prMsg}`);
 }
@@ -1704,7 +1808,7 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if (draft.length && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; chartSearch=""; render(); }
@@ -1714,6 +1818,7 @@ function bind(){
     else if (ds.subreject!==undefined && ds.subreject!=="") rejectSub(+ds.subreject);
     else if (ds.injmus){ injSel[ds.injmus] = !injSel[ds.injmus]; if(!injSel[ds.injmus]) delete injSel[ds.injmus]; render(); }
     else if (ds.injgrade){ injForm.grade = ds.injgrade; render(); }
+    else if (ds.injchronic){ injForm.chronic = !injForm.chronic; render(); }
     else if (ds.injci){ const c=client(); const i=c.injuries.find(x=>x.id===ds.injci); if(!i) return;
       const pv = $("#pain-"+ds.injci).value, nv = $("#cinote-"+ds.injci).value.trim();
       if (pv===""){ toast("Enter a pain score 0–10"); return; }
@@ -1777,12 +1882,17 @@ function bind(){
         const muscles = Object.keys(injSel);
         if (!label){ toast("Name the injury"); return; }
         if (!muscles.length){ toast("Tap at least one affected muscle group"); return; }
-        const lo = +($("#injlo").value)||14, hi = +($("#injhi").value)||28;
         c.injuries = c.injuries||[];
-        c.injuries.push({ id:"inj"+Date.now(), label, type:injForm.type, grade:injForm.grade,
-          muscles, onset:$("#injonset").value||todayISO(), expLo:Math.min(lo,hi), expHi:Math.max(lo,hi),
-          status:"active", checkIns:[] });
-        injSel={}; save(); render(); toast(`${label} logged — it now shows on the body map and brief`); }
+        if (injForm.chronic){
+          c.injuries.push({ id:"inj"+Date.now(), label, type:injForm.type, grade:injForm.grade, chronic:true,
+            muscles, onset:$("#injonset").value||todayISO(), status:"active", checkIns:[] });
+        } else {
+          const lo = +($("#injlo").value)||14, hi = +($("#injhi").value)||28;
+          c.injuries.push({ id:"inj"+Date.now(), label, type:injForm.type, grade:injForm.grade,
+            muscles, onset:$("#injonset").value||todayISO(), expLo:Math.min(lo,hi), expHi:Math.max(lo,hi),
+            status:"active", checkIns:[] });
+        }
+        injSel={}; save(); render(); toast(injForm.chronic?`${label} logged — chronic tracking is on`:`${label} logged — it now shows on the body map and brief`); }
       else if (a==="whoop-link"){ const l = whoopConnectLink(client());
         if (l && typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Connect link copied — text it to the client")).catch(()=>prompt("Send this link to the client:", l));
         else if (l) prompt("Send this link to the client:", l); }
