@@ -736,7 +736,7 @@ function chronicHot(i){ const ci = lastCheckIn(i); if (!ci) return false; const 
 function ciStr(ci){ return `pain ${ci.pain}/10${ci.worst!=null||ci.best!=null?` (best ${ci.best??"–"} · worst ${ci.worst??"–"})`:""}`; }
 function flaggedInjuries(c){ return activeInjuries(c).filter(i => !i.chronic || chronicHot(i)); }
 function injuredMuscles(c){ const s=new Set(); for (const i of flaggedInjuries(c)) for (const m of i.muscles||[]) s.add(m); return s; }
-function packUsed(c){ const p=c.pay; if (!p||p.type!=="pack"||!p.started) return 0; return c.sessions.filter(s=>!s.solo && s.date>=p.started).length; }
+function packUsed(c){ const p=c.pay; if (!p||p.type!=="pack"||!p.started) return 0; return (p.offset||0) + c.sessions.filter(s=>!s.solo && s.date>=p.started).length; }
 function checkPackRenewal(c){
   const p = c.pay; if (!p || p.type !== "pack" || !p.started) return;
   const used = packUsed(c), size = p.size || 10;
@@ -1688,6 +1688,7 @@ function payMenu(c){
       <option value="monthly" ${p.type==="monthly"?"selected":""}>Monthly / weekly rate</option></select></div>
     <div class="minirow"><span class="lbl">Pack size</span><input type="number" id="paySize" style="width:70px" value="${p.size||10}"></div>
     <div class="minirow"><span class="lbl">Started</span><input type="date" id="payStart" value="${p.started||todayISO()}"></div>
+    <div class="minirow"><span class="lbl">Already used</span><input type="number" id="payOffset" style="width:70px" value="${p.offset||0}"> <span class="lbl">sessions before app tracking</span></div>
     <div class="minirow"><span class="lbl">Target /wk</span><input type="number" id="payWeekly" style="width:70px" value="${p.weekly||2}"></div>
     <div class="muted" style="margin-top:8px">Packs count trainer-logged sessions on/after the start date — solo workouts never count.${p.type==="pack"&&p.started?` Currently ${packUsed(c)} of ${p.size||10} used.`:""}</div>
     <button class="btn" style="width:100%;margin-top:10px" id="paySave">Save</button>
@@ -1698,10 +1699,11 @@ function payMenu(c){
     if (ev.target===wrap) wrap.remove();
     if (ev.target.id==="paySave"){
       c.pay = { type: wrap.querySelector("#payType").value, size:+wrap.querySelector("#paySize").value||10,
-        started: wrap.querySelector("#payStart").value||todayISO(), weekly:+wrap.querySelector("#payWeekly").value||0 };
+        started: wrap.querySelector("#payStart").value||todayISO(), weekly:+wrap.querySelector("#payWeekly").value||0,
+        offset: Math.max(0, +wrap.querySelector("#payOffset").value||0) };
       save(); render(); toast("Payment settings saved"); wrap.remove(); }
     if (ev.target.id==="payNew"){
-      c.pay = { type:"pack", size:+wrap.querySelector("#paySize").value||10, started: todayISO(), weekly:+wrap.querySelector("#payWeekly").value||0 };
+      c.pay = { type:"pack", size:+wrap.querySelector("#paySize").value||10, started: todayISO(), weekly:+wrap.querySelector("#payWeekly").value||0, offset:0 };
       save(); render(); toast("New pack started today"); wrap.remove(); }
   });
 }
