@@ -671,6 +671,14 @@ let view = { page:"roster", clientId:null, tab:"fatigue" };
 let draft = [];
 let draftDate = todayISO();
 let draftTitle = "";
+/* duo (semi-private) sessions: two clients, one dictation, per-person numbers */
+let duoPartnerId = null;
+let duoDraftB = [];
+let duoActive = "a";
+function duoPartner(){ return duoPartnerId ? S.clients.find(x=>x.id===duoPartnerId) : null; }
+function activeDraft(){ return (duoPartnerId && duoActive==="b") ? duoDraftB : draft; }
+function activeDraftClient(){ return (duoPartnerId && duoActive==="b") ? duoPartner() : client(); }
+function resetDuo(){ duoPartnerId = null; duoDraftB = []; duoActive = "a"; }
 let chartRange = "3m";
 let chartSearch = "";
 let pendingSubs = null;   /* [{id,client,date,title,text}] fetched from worker */
@@ -1105,7 +1113,7 @@ function draftItemHtml(it, i){
     <div class="minirow"><button class="btn-sm" data-sdmode="${i}">⇄ per-set weights (pyramid)</button></div>
     <div class="ichips">${chips}</div>`;
   }
-  const _injSet = injuredMuscles(client()||{});
+  const _injSet = injuredMuscles(activeDraftClient()||client()||{});
   const _hitInj = !it.unmatched ? [...(it.primary||[]), ...(it.secondary||[])].filter(m=>_injSet.has(m)) : [];
   return `<div class="draft-item ${it.unmatched?"bad":""}" ${_hitInj.length?`style="border-color:${INJ_COLOR}"`:""}>
     ${_hitInj.length?`<div style="color:#e3c8ec;font-size:11px;font-weight:800;margin-bottom:4px">⚠ loads injured: ${_hitInj.join(", ")}</div>`:""}
@@ -1118,18 +1126,30 @@ function draftItemHtml(it, i){
 }
 
 function tabLog(c){
-  const items = draft.map((it,i)=>draftItemHtml(it,i)).join("");
+  const p = duoPartner();
+  const ad = activeDraft();
+  const items = ad.map((it,i)=>draftItemHtml(it,i)).join("");
+  const duoSel = `<div class="minirow" style="margin-top:8px"><span class="lbl">Duo</span>
+      <select id="duoSel" style="flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:13px;padding:8px">
+        <option value="">— solo session —</option>
+        ${S.clients.filter(x=>x.id!==c.id).map(x=>`<option value="${x.id}" ${duoPartnerId===x.id?"selected":""}>+ ${esc(x.name)} (training together)</option>`).join("")}
+      </select></div>`;
+  const duoBar = p ? `<div class="ichips" style="margin:0 0 8px">
+      <span class="ichip ${duoActive==="a"?"on":""}" data-duoside="a">${esc(c.name)}</span>
+      <span class="ichip ${duoActive==="b"?"on":""}" data-duoside="b">${esc(p.name)}</span>
+    </div>
+    <div class="muted" style="margin-bottom:8px;font-size:11px">One dictation, two profiles. Tap a name, adjust their weights/sets — removals apply only to them. Injury flags follow whoever you are editing.</div>` : "";
   return `<div class="card">
     <textarea id="logtext" placeholder="e.g. bench press 135x10, 155x8, 185x6 heavy — or back squats 4x6 at 185"></textarea>
     <div class="row" style="gap:8px;margin-top:10px">
       <button class="btn2 grow" data-act="parse">Parse text</button>
       <button class="btn2 grow" data-act="picker">+ Quick add</button>
-    </div></div>
-  ${items?`<h2>Session draft</h2>${items}`:`<div class="empty">Nothing in the draft yet — parse text or quick-add.</div>`}
-  ${draft.length?`<div class="card">
+    </div>${duoSel}</div>
+  ${(items||duoBar)?`<h2>Session draft${p?` — editing ${esc(duoActive==="b"?p.name:c.name)}`:""}</h2>${duoBar}${items||`<div class="empty">Nothing in ${esc(duoActive==="b"?p.name:c.name)}'s draft.</div>`}`:`<div class="empty">Nothing in the draft yet — parse text or quick-add.</div>`}
+  ${(draft.length||duoDraftB.length)?`<div class="card">
     <div class="minirow"><span class="lbl">Session date</span><input type="date" id="sessdate" value="${draftDate}"></div>
     <div class="minirow"><input type="text" id="sesstitle" value="${esc(draftTitle)}" placeholder="Session title (e.g. Push, Legs)"></div>
-    <button class="btn" style="margin-top:10px" data-act="save-session">Save session → update fatigue</button>
+    <button class="btn" style="margin-top:10px" data-act="save-session">${p?`Save duo session → both profiles`:`Save session → update fatigue`}</button>
   </div>`:""}`;
 }
 
@@ -1454,7 +1474,7 @@ function tabNotes(c){
 
 function assignModal(){
   const creating = assignTarget === -1;
-  const it = creating ? { raw: "" } : draft[assignTarget];
+  const it = creating ? { raw: "" } : activeDraft()[assignTarget];
   const grid = E.MUSCLES.map(m=>{
     const st = assignSel[m]||"";
     return `<div class="mg ${st}" data-mus="${m}">${m}${st==="p"?" ●":st==="s"?" ○":""}</div>`;
@@ -1484,8 +1504,8 @@ function pickerModal(){
 function parseText(){
   const t = $("#logtext").value.trim(); if(!t) return;
   const { parsed, unmatched } = E.parseSession(t, S.customExercises);
-  for (const p of parsed) draft.push(p);
-  for (const u of unmatched) draft.push({ ...u, unmatched:true });
+  for (const p of parsed){ draft.push(p); if (duoPartnerId) duoDraftB.push(JSON.parse(JSON.stringify(p))); }
+  for (const u of unmatched){ draft.push({ ...u, unmatched:true }); if (duoPartnerId) duoDraftB.push({ ...JSON.parse(JSON.stringify(u)), unmatched:true }); }
   if (!parsed.length && !unmatched.length) toast("Nothing parsed — include sets like 3x10, or use + Quick add > Create new exercise");
   render();
 }
@@ -1542,23 +1562,32 @@ function applyParsedSession(c, items, date, title, solo){
 
 function saveSession(){
   const c = client();
-  if (draft.some(d=>d.unmatched)) { toast("Assign muscles to flagged items first"); return; }
-  const items = draft.filter(d=>!d.unmatched).map(normalizeItem);
-  if (!items.length) return;
+  const p = duoPartner();
+  if (draft.some(d=>d.unmatched) || (p && duoDraftB.some(d=>d.unmatched))){ toast("Assign muscles to flagged items first"); return; }
+  const itemsA = draft.filter(d=>!d.unmatched).map(normalizeItem);
+  const itemsB = p ? duoDraftB.filter(d=>!d.unmatched).map(normalizeItem) : [];
+  if (!itemsA.length && !itemsB.length) return;
   draftDate = $("#sessdate").value || todayISO();
-  const title = $("#sesstitle").value.trim() || "Session";
-  const prMsg = applyParsedSession(c, items, draftDate, title);
-  draft = []; draftDate = todayISO(); draftTitle = "";
+  const title = $("#sesstitle").value.trim() || (p ? "Duo session" : "Session");
+  let prMsgA = "", prMsgB = "";
+  if (itemsA.length) prMsgA = applyParsedSession(c, itemsA, draftDate, title);
+  if (p && itemsB.length) prMsgB = applyParsedSession(p, itemsB, draftDate, title);
+  const wasDuo = !!p, pName = p ? p.name : "";
+  draft = []; resetDuo(); draftDate = todayISO(); draftTitle = "";
   save();
   view.tab = "fatigue"; render();
-  const top = E.MUSCLES.slice().sort((a,b)=>c.snapshot[b]-c.snapshot[a]).slice(0,3)
-    .map(m=>`${m} ${E.round1(c.snapshot[m])}`).join(" · ");
-  toast(`Saved. Highest: ${top}.${prMsg}`);
+  if (wasDuo){
+    toast(`Saved to both — ${c.name}${prMsgA||""} · ${pName}${prMsgB||""}`);
+  } else {
+    const top = E.MUSCLES.slice().sort((a,b)=>c.snapshot[b]-c.snapshot[a]).slice(0,3)
+      .map(m=>`${m} ${E.round1(c.snapshot[m])}`).join(" · ");
+    toast(`Saved. Highest: ${top}.${prMsgA}`);
+  }
 }
 
 function confirmAssign(){
   const creating = assignTarget === -1;
-  const it = creating ? { raw: "", sets: 3, reps: "", weight: null, intensity: "moderate" } : draft[assignTarget];
+  const it = creating ? { raw: "", sets: 3, reps: "", weight: null, intensity: "moderate" } : activeDraft()[assignTarget];
   const p = Object.keys(assignSel).filter(m=>assignSel[m]==="p");
   const s = Object.keys(assignSel).filter(m=>assignSel[m]==="s");
   if (!p.length){ toast("Pick at least one primary muscle"); return; }
@@ -1572,7 +1601,14 @@ function confirmAssign(){
   const item = { name, primary:p, secondary:s, sets:it.setDetail?it.setDetail.length:(it.sets||3),
     reps:it.reps||"", weight:it.weight??null, intensity:it.intensity||"moderate",
     ...(it.setDetail?{setDetail:it.setDetail}:{}), raw:it.raw };
-  if (creating) draft.push(item); else draft[assignTarget] = item;
+  const AD = activeDraft();
+  if (creating) AD.push(item); else AD[assignTarget] = item;
+  if (duoPartnerId){
+    const other = AD === draft ? duoDraftB : draft;
+    if (creating) other.push(JSON.parse(JSON.stringify(item)));
+    else { const k = other.findIndex(x=>x.unmatched && x.raw===item.raw);
+      if (k>=0) other[k] = JSON.parse(JSON.stringify(item)); }
+  }
   assignTarget = null; assignSel = {};
   render(); toast(`Added “${name}” to your exercise library`);
 }
@@ -1854,10 +1890,10 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
     if (!t) return;
     const ds = t.dataset;
-    if (ds.open){ if (draft.length && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; chartSearch=""; render(); }
+    if (ds.open){ if ((draft.length||duoDraftB.length) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; resetDuo(); chartSearch=""; render(); }
     else if (ds.bmv){ toast(ds.bmv); }
     else if (ds.crange){ chartRange = ds.crange; render(); }
     else if (ds.subapprove!==undefined && ds.subapprove!=="") approveSub(+ds.subapprove);
@@ -1893,27 +1929,29 @@ function bind(){
         c.sessions.splice(+ds.delsess,1); rebuildClient(c); save(); render(); toast("Session deleted"); } }
     else if (ds.bm){ const [m,v]=ds.bm.split(":"); toast(`${m}: ${v} / 10`); }
     else if (ds.tab){ view.tab=ds.tab; render(); }
-    else if (ds.del!==undefined && ds.del!==""){ draft.splice(+ds.del,1); render(); }
+    else if (ds.duoside){ duoActive = ds.duoside; render(); }
+    else if (ds.del!==undefined && ds.del!==""){ activeDraft().splice(+ds.del,1); render(); }
     else if (ds.pinnote!==undefined && ds.pinnote!==""){ const n=client().notes[+ds.pinnote]; n.pinned=!n.pinned; save(); render(); }
     else if (ds.delnote!==undefined && ds.delnote!==""){ client().notes.splice(+ds.delnote,1); save(); render(); }
     else if (ds.assign!==undefined && ds.assign!==""){ assignTarget=+ds.assign; assignSel={}; render(); }
-    else if (ds.int){ const [i,k]=ds.int.split(":"); draft[+i].intensity=k; render(); }
-    else if (ds.sdmode!==undefined && ds.sdmode!==""){ const it=draft[+ds.sdmode];
+    else if (ds.int){ const [i,k]=ds.int.split(":"); activeDraft()[+i].intensity=k; render(); }
+    else if (ds.sdmode!==undefined && ds.sdmode!==""){ const it=activeDraft()[+ds.sdmode];
       it.setDetail = Array.from({length:Math.max(1, it.sets||3)}, ()=>({reps:(it.reps||"").split(/[\/,-]/)[0]||"", weight:it.weight??null}));
       normalizeItem(it); render(); }
-    else if (ds.sda!==undefined && ds.sda!==""){ const it=draft[+ds.sda];
+    else if (ds.sda!==undefined && ds.sda!==""){ const it=activeDraft()[+ds.sda];
       const last=it.setDetail[it.setDetail.length-1]||{reps:"",weight:null};
       it.setDetail.push({reps:last.reps,weight:last.weight}); normalizeItem(it); render(); }
-    else if (ds.sdx){ const [i,j]=ds.sdx.split(":").map(Number); const it=draft[i];
+    else if (ds.sdx){ const [i,j]=ds.sdx.split(":").map(Number); const it=activeDraft()[i];
       if (it.setDetail.length>1){ it.setDetail.splice(j,1); } else { delete it.setDetail; }
       normalizeItem(it); render(); }
     else if (ds.mus){ const m=ds.mus; assignSel[m]=assignSel[m]==="p"?"s":assignSel[m]==="s"?undefined:"p"; if(!assignSel[m])delete assignSel[m]; render(); }
     else if (ds.pick!==undefined && ds.pick!==""){ const ex=E.EXERCISE_LIBRARY.concat(S.customExercises||[])[+ds.pick];
-      draft.push({name:ex.name,primary:ex.p,secondary:ex.s,sets:3,reps:"",weight:null,intensity:"moderate"}); pickerOpen=false; render(); }
+      const mk = () => ({name:ex.name,primary:ex.p,secondary:ex.s,sets:3,reps:"",weight:null,intensity:"moderate"});
+      draft.push(mk()); if (duoPartnerId) duoDraftB.push(mk()); pickerOpen=false; render(); }
     else if (ds.close && e.target.classList.contains("modal-bg")){ assignTarget=null; pickerOpen=false; render(); }
     else if (ds.act){
       const a=ds.act;
-      if (a==="back"){ if (draft.length && !confirm("Discard the unsaved session draft?")) return; draft=[]; draftTitle=""; view={page:"roster",clientId:null,tab:"fatigue"}; render(); }
+      if (a==="back"){ if ((draft.length||duoDraftB.length) && !confirm("Discard the unsaved session draft?")) return; draft=[]; draftTitle=""; resetDuo(); view={page:"roster",clientId:null,tab:"fatigue"}; render(); }
       else if (a==="parse") parseText();
       else if (a==="picker"){ pickerOpen=true; render(); setTimeout(()=>$("#picksearch")?.focus(),50); }
       else if (a==="new-exercise"){ pickerOpen=false; assignTarget=-1; assignSel={}; view.tab="log"; render(); }
@@ -1952,12 +1990,17 @@ function bind(){
   };
   app.oninput = e => {
     const t = e.target, ds = t.dataset;
-    if (ds.sets) draft[+ds.sets].sets = Math.max(1,+t.value||1);
-    else if (ds.reps) draft[+ds.reps].reps = t.value;
-    else if (ds.wt) draft[+ds.wt].weight = t.value===""?null:+t.value;
-    else if (ds.sdw){ const [i,j]=ds.sdw.split(":").map(Number); draft[i].setDetail[j].weight = t.value===""?null:+t.value; draft[i].weight = E.maxWeight(draft[i].setDetail); }
-    else if (ds.sdr){ const [i,j]=ds.sdr.split(":").map(Number); draft[i].setDetail[j].reps = t.value; draft[i].reps = draft[i].setDetail.map(s=>s.reps||"").join("/"); }
-    else if (ds.sdi){ const [i,j]=ds.sdi.split(":").map(Number); if (t.value) draft[i].setDetail[j].intensity = t.value; else delete draft[i].setDetail[j].intensity; render(); }
+    if (t.id==="duoSel"){ duoPartnerId = t.value || null; duoActive = "a";
+      if (duoPartnerId && draft.length && !duoDraftB.length) duoDraftB = JSON.parse(JSON.stringify(draft));
+      if (!duoPartnerId) duoDraftB = [];
+      render(); return; }
+    const AD = activeDraft();
+    if (ds.sets) AD[+ds.sets].sets = Math.max(1,+t.value||1);
+    else if (ds.reps) AD[+ds.reps].reps = t.value;
+    else if (ds.wt) AD[+ds.wt].weight = t.value===""?null:+t.value;
+    else if (ds.sdw){ const [i,j]=ds.sdw.split(":").map(Number); AD[i].setDetail[j].weight = t.value===""?null:+t.value; AD[i].weight = E.maxWeight(AD[i].setDetail); }
+    else if (ds.sdr){ const [i,j]=ds.sdr.split(":").map(Number); AD[i].setDetail[j].reps = t.value; AD[i].reps = AD[i].setDetail.map(s=>s.reps||"").join("/"); }
+    else if (ds.sdi){ const [i,j]=ds.sdi.split(":").map(Number); if (t.value) AD[i].setDetail[j].intensity = t.value; else delete AD[i].setDetail[j].intensity; render(); }
     else if (t.id==="injtype"){ injForm.type = t.value; const [lo,hi]=injRefDays(); $("#injlo").value=lo; $("#injhi").value=hi; }
     else if (t.id==="sessdate") draftDate = t.value;
     else if (t.id==="chartsearch"){
