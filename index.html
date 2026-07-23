@@ -998,7 +998,11 @@ function tabFatigue(c){
   const cur = E.decaySnapshotAdj(c.snapshot, E.daysBetween(c.lastUpdated, todayISO()), effFactor(c));
   const inj = activeInjuries(c);
   const injBanner = inj.length ? `<div style="margin-top:8px;padding:8px 10px;border:1px solid ${INJ_COLOR}55;border-radius:10px;background:${INJ_COLOR}14">
-    ${inj.map(i=>`<div style="font-size:12px;color:#e3c8ec;font-weight:700" data-tab="injuries">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}</div>`).join("")}
+    ${inj.map(i=>{
+      if (i.chronic){ const ci = lastCheckIn(i);
+        return `<div style="font-size:12px;color:#e3c8ec;font-weight:700" data-tab="injuries">∞ ${esc(i.label)} — chronic${ci?` · ${ciStr(ci)}`:""}${chronicHot(i)?" · flared":""}</div>`; }
+      return `<div style="font-size:12px;color:#e3c8ec;font-weight:700" data-tab="injuries">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}</div>`;
+    }).join("")}
   </div>` : "";
   return `<div class="card"><div style="display:flex;gap:10px;align-items:stretch">
     ${sysGauge(c)}${readyRing(c)}
