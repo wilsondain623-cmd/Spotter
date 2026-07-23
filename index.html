@@ -724,7 +724,8 @@ const INJURY_REFS = {
   other:        { label:"Other",          g:{ "1":[14,28], "2":[14,28], "3":[14,28] } },
 };
 function activeInjuries(c){ return (c.injuries||[]).filter(i=>i.status!=="cleared"); }
-function chronicHot(i){ const ci = lastCheckIn(i); return !!ci && ci.pain >= 4 && E.daysBetween(ci.date, todayISO()) <= 7; }
+function chronicHot(i){ const ci = lastCheckIn(i); if (!ci) return false; const p = ci.worst != null ? ci.worst : ci.pain; return p >= 4 && E.daysBetween(ci.date, todayISO()) <= 7; }
+function ciStr(ci){ return `pain ${ci.pain}/10${ci.worst!=null||ci.best!=null?` (best ${ci.best??"–"} · worst ${ci.worst??"–"})`:""}`; }
 function flaggedInjuries(c){ return activeInjuries(c).filter(i => !i.chronic || chronicHot(i)); }
 function injuredMuscles(c){ const s=new Set(); for (const i of flaggedInjuries(c)) for (const m of i.muscles||[]) s.add(m); return s; }
 function packUsed(c){ const p=c.pay; if (!p||p.type!=="pack"||!p.started) return 0; return c.sessions.filter(s=>!s.solo && s.date>=p.started).length; }
@@ -1056,8 +1057,8 @@ function tabBrief(c){
   const injs = activeInjuries(c);
   const injBlock = injs.length ? `<div class="card" style="border-color:${INJ_COLOR}66">${injs.map(i=>{
     const ci = lastCheckIn(i);
-    if (i.chronic) return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">∞ ${esc(i.label)} — chronic${ci?` · pain ${ci.pain}/10 (${fmtDate(ci.date)})`:" · no check-ins yet"}${chronicHot(i)?' · <span style="color:#e0a8a8">flared — keep loading gentle</span>':""}</div>`;
-    return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}${ci?` · pain ${ci.pain}/10 (${fmtDate(ci.date)})`:" · no check-ins yet"}</div>`;
+    if (i.chronic) return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">∞ ${esc(i.label)} — chronic${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${chronicHot(i)?' · <span style="color:#e0a8a8">flared — keep loading gentle</span>':""}</div>`;
+    return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}</div>`;
   }).join("")}</div>` : "";
   return `${injBlock}${flagsBlock(c)}<div class="card brief-box">
     <div><span class="bb">Last session:</span> ${lastS?esc(lastS.title)+" — "+fmtDate(lastS.date)+" ("+E.daysBetween(lastS.date,todayISO())+" days ago)":"none logged"}</div>
@@ -1301,17 +1302,22 @@ function tabInjuries(c){
           <div class="d-meta">${(i.muscles||[]).join(", ")} · tracking since ${fmtDate(i.onset)}</div>
         </div><button class="btn-x" data-injdel="${i.id}">✕</button></div>
         <div class="row" style="margin-top:8px;gap:8px">
-          <div class="grow">${ci?`<span style="font-size:12px;color:#CFD3DC">Last check-in ${fmtDate(ci.date)} · pain ${ci.pain}/10${ci.note?" · "+esc(ci.note):""}</span>`:`<span style="font-size:12px;color:#8b93a5">No check-ins yet</span>`}
+          <div class="grow">${ci?`<span style="font-size:12px;color:#CFD3DC">Last check-in ${fmtDate(ci.date)} · ${ciStr(ci)}${ci.note?" · "+esc(ci.note):""}</span>`:`<span style="font-size:12px;color:#8b93a5">No check-ins yet</span>`}
           ${a30!=null?`<span style="font-size:11px;color:#8b93a5"> · 30d avg ${a30}${trend}</span>`:""}
           ${stale?`<span style="color:#e0a86a;font-size:11px;font-weight:700"> · check-in due</span>`:""}</div>
           ${spark}
         </div>
         ${chronicHot(i)?`<div style="margin-top:6px;font-size:12px;color:#e0a8a8;font-weight:700">Recent pain is high — drafts loading this area will warn until it settles.</div>`:""}
-        <div class="minirow">
-          <span class="lbl">pain</span><input type="number" inputmode="numeric" min="0" max="10" style="width:58px" id="pain-${i.id}">
-          <input type="text" style="flex:1" id="cinote-${i.id}" placeholder="note (optional)">
-          <button class="btn-sm" data-injci="${i.id}">Check in</button>
-        </div>
+<div class="minirow">
+  <span class="lbl">best</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painb-${i.id}" placeholder="0">
+  <span class="lbl">worst</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painw-${i.id}" placeholder="0">
+  <span class="lbl">now</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="pain-${i.id}" placeholder="0">
+</div>
+<div class="minirow">
+  <input type="text" style="flex:1" id="cinote-${i.id}" placeholder="note (optional)">
+  <button class="btn-sm" data-injci="${i.id}">Check in</button>
+</div>
+<div class="muted" style="font-size:10px;margin-top:2px">Since last check-in: best it got, worst it got, right now (0–10).</div>
         <button class="btn2" style="width:100%;margin-top:8px" data-injclear="${i.id}">Mark resolved ✓</button>
         <div class="muted" style="margin-top:6px;font-size:10px">Chronic tracking — no recovery window. Check in whenever it flares or settles.</div>
       </div>`;
@@ -1336,15 +1342,20 @@ function tabInjuries(c){
         <div class="bar-track" style="margin-top:3px"><div class="bar-fill" style="width:${pct}%;background:linear-gradient(90deg,${INJ_COLOR}88,${INJ_COLOR})"></div></div>
       </div>
       <div class="row" style="margin-top:8px;gap:8px">
-        <div class="grow">${ci?`<span style="font-size:12px;color:#CFD3DC">Last check-in ${fmtDate(ci.date)} · pain ${ci.pain}/10${ci.note?" · "+esc(ci.note):""}</span>`:`<span style="font-size:12px;color:#8b93a5">No check-ins yet</span>`}
+        <div class="grow">${ci?`<span style="font-size:12px;color:#CFD3DC">Last check-in ${fmtDate(ci.date)} · ${ciStr(ci)}${ci.note?" · "+esc(ci.note):""}</span>`:`<span style="font-size:12px;color:#8b93a5">No check-ins yet</span>`}
         ${stale?`<span style="color:#e0a86a;font-size:11px;font-weight:700"> · check-in due</span>`:""}</div>
         ${spark}
       </div>
-      <div class="minirow">
-        <span class="lbl">pain</span><input type="number" inputmode="numeric" min="0" max="10" style="width:58px" id="pain-${i.id}">
-        <input type="text" style="flex:1" id="cinote-${i.id}" placeholder="note (optional)">
-        <button class="btn-sm" data-injci="${i.id}">Check in</button>
-      </div>
+<div class="minirow">
+  <span class="lbl">best</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painb-${i.id}" placeholder="0">
+  <span class="lbl">worst</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painw-${i.id}" placeholder="0">
+  <span class="lbl">now</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="pain-${i.id}" placeholder="0">
+</div>
+<div class="minirow">
+  <input type="text" style="flex:1" id="cinote-${i.id}" placeholder="note (optional)">
+  <button class="btn-sm" data-injci="${i.id}">Check in</button>
+</div>
+<div class="muted" style="font-size:10px;margin-top:2px">Since last check-in: best it got, worst it got, right now (0–10).</div>
       <button class="btn2" style="width:100%;margin-top:8px" data-injclear="${i.id}">Mark cleared ✓</button>
       <div class="muted" style="margin-top:6px;font-size:10px">Typical windows are reference ranges, not a diagnosis — clinical judgment overrides.</div>
     </div>`;
@@ -1851,9 +1862,15 @@ function bind(){
     else if (ds.injgrade){ injForm.grade = ds.injgrade; render(); }
     else if (ds.injchronic){ injForm.chronic = !injForm.chronic; render(); }
     else if (ds.injci){ const c=client(); const i=c.injuries.find(x=>x.id===ds.injci); if(!i) return;
-      const pv = $("#pain-"+ds.injci).value, nv = $("#cinote-"+ds.injci).value.trim();
-      if (pv===""){ toast("Enter a pain score 0–10"); return; }
-      i.checkIns = i.checkIns||[]; i.checkIns.push({date:todayISO(), pain:Math.max(0,Math.min(10,+pv)), note:nv});
+      const pv = $("#pain-"+ds.injci).value, bv = $("#painb-"+ds.injci).value, wv = $("#painw-"+ds.injci).value, nv = $("#cinote-"+ds.injci).value.trim();
+      if (pv==="" && wv==="" && bv===""){ toast("Enter at least one pain score 0–10"); return; }
+      const clamp10 = x => Math.max(0, Math.min(10, +x));
+      const entry = { date: todayISO(), pain: clamp10(pv!==""?pv:(wv!==""?wv:bv)), note: nv };
+      if (bv!=="") entry.best = clamp10(bv);
+      if (wv!=="") entry.worst = clamp10(wv);
+      if (entry.best!=null && entry.best>entry.pain) entry.best = entry.pain;
+      if (entry.worst!=null && entry.worst<entry.pain) entry.worst = entry.pain;
+      i.checkIns = i.checkIns||[]; i.checkIns.push(entry);
       save(); render(); toast("Check-in saved"); }
     else if (ds.injclear){ const c=client(); const i=c.injuries.find(x=>x.id===ds.injclear); if(!i) return;
       if (confirm(`Mark "${i.label}" as cleared?`)){ i.status="cleared"; i.clearedDate=todayISO(); save(); render(); toast("Cleared — moved to history"); } }
