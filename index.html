@@ -737,6 +737,14 @@ function ciStr(ci){ return `pain ${ci.pain}/10${ci.worst!=null||ci.best!=null?` 
 function flaggedInjuries(c){ return activeInjuries(c).filter(i => !i.chronic || chronicHot(i)); }
 function injuredMuscles(c){ const s=new Set(); for (const i of flaggedInjuries(c)) for (const m of i.muscles||[]) s.add(m); return s; }
 function packUsed(c){ const p=c.pay; if (!p||p.type!=="pack"||!p.started) return 0; return c.sessions.filter(s=>!s.solo && s.date>=p.started).length; }
+function checkPackRenewal(c){
+  const p = c.pay; if (!p || p.type !== "pack" || !p.started) return;
+  const used = packUsed(c), size = p.size || 10;
+  if (used < size) return;
+  setTimeout(() => {
+    if (confirm(`${c.name} just used session ${used} of ${size} — pack complete. Set up their next pack now?`)) payMenu(c);
+  }, 450);
+}
 function weekSessions(c){ const cut = new Date(Date.now()-7*86400000); const cutISO = cut.getFullYear()+"-"+String(cut.getMonth()+1).padStart(2,"0")+"-"+String(cut.getDate()).padStart(2,"0"); return c.sessions.filter(s=>!s.solo && s.date>cutISO).length; }
 function payBrief(c){
   const p = c.pay; if (!p || !p.type || p.type==="none") return "";
@@ -885,7 +893,7 @@ function rosterView(){
     const injN = flaggedInjuries(c).length;
     let payChip = "";
     if (c.pay && c.pay.type==="pack" && c.pay.started){ const left = Math.max(0,(c.pay.size||10)-packUsed(c));
-      if (left<=2) payChip = `<span class="chip" style="color:${left===0?"#c95f5f":"#d4a04d"};border-color:#d4a04d55">${left} left</span>`; }
+      if (left<=2) payChip = `<span class="chip" style="color:${left===0?"#c95f5f":"#d4a04d"};border-color:#d4a04d55">${left===0?"renew":left+" left"}</span>`; }
     return `<div class="card row" data-open="${c.id}" style="cursor:pointer">
       <div class="avatar">${esc(c.name[0])}</div>
       <div class="grow"><div class="cname">${esc(c.name)}</div>
@@ -1576,6 +1584,8 @@ function saveSession(){
   draft = []; resetDuo(); draftDate = todayISO(); draftTitle = "";
   save();
   view.tab = "fatigue"; render();
+  if (itemsA.length) checkPackRenewal(c);
+  if (p && itemsB.length) checkPackRenewal(p);
   if (wasDuo){
     toast(`Saved to both — ${c.name}${prMsgA||""} · ${pName}${prMsgB||""}`);
   } else {
