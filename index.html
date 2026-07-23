@@ -193,7 +193,7 @@ const EXERCISE_LIBRARY = [
   { name: "Shoulder Taps", aliases: ["shoulder taps","shoulder tap"], p: ["core"], s: ["front-delts"] },
   { name: "Rope Machine Pull", aliases: ["rope machine pull","rope machine pulls","rope pulls"], p: ["lats"], s: ["biceps","forearms-grip","core"] },
   { name: "Conditioning", aliases: ["conditioning","field day","lateral slides","skipping","hops"], p: ["calves"], s: ["quads","hamstrings","core"], sys: 1.6 },
-  { name: "Running", aliases: ["run","running","jog","jogging","treadmill run","treadmill"], p: ["quads","calves"], s: ["hamstrings","glutes","core"], sys: 1.6 },
+  { name: "Running", aliases: ["ran", "run","running","jog","jogging","treadmill run","treadmill"], p: ["quads","calves"], s: ["hamstrings","glutes","core"], sys: 1.6 },
   { name: "Sprints", aliases: ["sprint","sprints","build-up sprints","hill sprints"], p: ["hamstrings","glutes"], s: ["quads","calves","core"], sys: 1.6 },
   { name: "Bike", aliases: ["bike","cycling","spin bike","stationary bike"], p: ["quads"], s: ["glutes","hamstrings","calves"], sys: 1.6 },
   { name: "Assault Bike", aliases: ["assault bike","air bike","echo bike"], p: ["quads"], s: ["biceps","triceps","calves","core"], sys: 1.6 },
@@ -249,10 +249,19 @@ function sessionFatigue(exercises) {
   const add = {};
   for (const m of MUSCLES) add[m] = 0;
   for (const ex of exercises) {
-    const mult = INTENSITY[ex.intensity] ?? 1.0;
-    const load = setLoadSum(ex.sets || 3) * repFactor(ex.reps);
-    for (const m of ex.primary || []) add[m] += BASE_PRIMARY * mult * load;
-    for (const m of ex.secondary || []) add[m] += BASE_PRIMARY * SECONDARY_FACTOR * mult * load;
+    let load;
+    if (ex.setDetail && ex.setDetail.length) {
+      load = 0;
+      ex.setDetail.forEach((sd, i) => {
+        const setF = i < 3 ? 1.0 : i < 5 ? 0.8 : 0.6;
+        const im = INTENSITY[sd.intensity ?? ex.intensity] ?? 1.0;
+        load += setF * im * repFactor(sd.reps);
+      });
+    } else {
+      load = (INTENSITY[ex.intensity] ?? 1.0) * setLoadSum(ex.sets || 3) * repFactor(ex.reps);
+    }
+    for (const m of ex.primary || []) add[m] += BASE_PRIMARY * load;
+    for (const m of ex.secondary || []) add[m] += BASE_PRIMARY * SECONDARY_FACTOR * load;
   }
   return add;
 }
@@ -273,7 +282,18 @@ function round1(x) { return Math.round(x * 10) / 10; }
 const SYS_BASE = 0.18, SYS_DECAY = 0.62;
 function sessionSys(exercises){
   let t = 0;
-  for (const ex of exercises) t += SYS_BASE * (INTENSITY[ex.intensity] ?? 1) * setLoadSum(ex.sets || 3) * (ex.sys || 1);
+  for (const ex of exercises) {
+    if (ex.setDetail && ex.setDetail.length) {
+      let s = 0;
+      ex.setDetail.forEach((sd, i) => {
+        const setF = i < 3 ? 1.0 : i < 5 ? 0.8 : 0.6;
+        s += setF * (INTENSITY[sd.intensity ?? ex.intensity] ?? 1);
+      });
+      t += SYS_BASE * s * (ex.sys || 1);
+    } else {
+      t += SYS_BASE * (INTENSITY[ex.intensity] ?? 1) * setLoadSum(ex.sets || 3) * (ex.sys || 1);
+    }
+  }
   return t;
 }
 function applySys(v, lastUpdated, date, exercises){
@@ -341,19 +361,25 @@ function parseSetsReps(seg) {
    or reps@weight like "10@135". Returns [{weight, reps}] in order found. */
 function parseSetTokens(seg) {
   const found = [];
-  const rx = /(\d+(?:\.\d+)?)\s*(?:[x×]|by)\s*(\d+)\b/gi;
+  const rx = /(\d+(?:\.\d+)?)\s*(?:[x×]|by|for)\s*(\d+)\b/gi;
   let m;
   while ((m = rx.exec(seg))) {
     const a = +m[1], b = +m[2];
-    if (a >= 20) found.push({ weight: a, reps: String(b), idx: m.index });
+    if (a >= 20) found.push({ weight: a, reps: String(b), idx: m.index, end: m.index + m[0].length });
   }
   const rx2 = /\b(\d{1,2})\s*@\s*(\d+(?:\.\d+)?)/g;
   while ((m = rx2.exec(seg))) {
     const r = +m[1], w = +m[2];
-    if (w >= 20) found.push({ weight: w, reps: String(r), idx: m.index });
+    if (w >= 20) found.push({ weight: w, reps: String(r), idx: m.index, end: m.index + m[0].length });
   }
   found.sort((a, b) => a.idx - b.idx);
-  return found.map(({ weight, reps }) => ({ weight, reps }));
+  /* per-set intensity: an intensity word between this set token and the next belongs to this set */
+  return found.map((t, i) => {
+    const tail = seg.slice(t.end, i + 1 < found.length ? found[i + 1].idx : seg.length);
+    let int_ = null;
+    for (const w of INTENSITY_WORDS) if (w.rx.test(tail)) { int_ = w.key; break; }
+    return int_ ? { weight: t.weight, reps: t.reps, intensity: int_ } : { weight: t.weight, reps: t.reps };
+  });
 }
 
 function parseWeight(seg) {
@@ -821,7 +847,7 @@ function reviewView(){
     }
     const { parsed, unmatched } = E.parseSession(s.text, S.customExercises);
     const exRows = parsed.map(p=>`<div class="pex" style="background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:7px 10px;margin-bottom:5px;font-size:13px">
-      <b>${esc(p.name)}</b> <span style="color:var(--dim)">${p.setDetail?p.setDetail.map(x=>`${x.weight??"–"}×${x.reps||"?"}`).join(", "):`${p.sets}×${p.reps||"?"}${p.weight?" @ "+p.weight:""}`} · ${p.intensity}</span></div>`).join("");
+      <b>${esc(p.name)}</b> <span style="color:var(--dim)">${p.setDetail?p.setDetail.map(x=>`${x.weight??"–"}×${x.reps||"?"}${x.intensity?" "+x.intensity:""}`).join(", "):`${p.sets}×${p.reps||"?"}${p.weight?" @ "+p.weight:""}`} · ${p.intensity}</span></div>`).join("");
     const unk = unmatched.map(u=>`<div style="color:#e0c48a;font-size:12px;margin-bottom:4px">? ${esc(u.raw)} — will be skipped unless you add it manually</div>`).join("");
     return `<div class="card">
       <div class="row"><div class="grow"><div class="cname">${esc(name)}${c?"":' <span style="color:#e0a86a;font-size:11px">(no matching client)</span>'}</div>
@@ -1054,12 +1080,17 @@ function draftItemHtml(it, i){
   } else if (it.setDetail){
     body = it.setDetail.map((sd,j)=>`<div class="minirow">
       <span class="lbl" style="width:36px">set ${j+1}</span>
-      <input type="number" inputmode="decimal" style="width:80px" value="${sd.weight??""}" data-sdw="${i}:${j}" placeholder="lbs">
-      <span class="lbl">lbs ×</span>
-      <input type="text" style="width:60px${sd.weight!=null&&!sd.reps?";border-color:#c95f5f":""}" value="${esc(sd.reps||"")}" data-sdr="${i}:${j}" placeholder="reps?">
+      <input type="number" inputmode="decimal" style="width:72px" value="${sd.weight??""}" data-sdw="${i}:${j}" placeholder="lbs">
+      <span class="lbl">×</span>
+      <input type="text" style="width:52px${sd.weight!=null&&!sd.reps?";border-color:#c95f5f":""}" value="${esc(sd.reps||"")}" data-sdr="${i}:${j}" placeholder="reps?">
+      <select data-sdi="${i}:${j}" style="width:86px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:${sd.intensity?"var(--text)":"var(--dim)"};font-size:12px;padding:6px 4px">
+        <option value="" ${!sd.intensity?"selected":""}>↳ ${esc(it.intensity)}</option>
+        ${["warmup","moderate","heavy","max"].map(k=>`<option value="${k}" ${sd.intensity===k?"selected":""}>${k}</option>`).join("")}
+      </select>
       <button class="btn-x" data-sdx="${i}:${j}">✕</button></div>`).join("")
       + `<div class="minirow"><button class="btn-sm" data-sda="${i}">+ add set</button></div>
-      <div class="ichips">${chips}</div>`;
+      <div class="ichips">${chips}</div>
+      <div class="muted" style="font-size:10px;margin-top:2px">Chips set the default intensity — the dropdown overrides it per set.</div>`;
   } else {
     body = `<div class="minirow">
       <span class="lbl">sets</span><input type="number" inputmode="numeric" style="width:58px" value="${it.sets}" data-sets="${i}">
@@ -1099,7 +1130,7 @@ function tabLog(c){
 
 function fmtExercise(x){
   if (x.setDetail && x.setDetail.length)
-    return `${x.name} ${x.setDetail.map(s=>`${s.weight??"–"}×${s.reps||"?"}`).join(", ")} (${x.intensity})`;
+    return `${x.name} ${x.setDetail.map(s=>`${s.weight??"–"}×${s.reps||"?"}${s.intensity&&s.intensity!==x.intensity?" "+s.intensity:""}`).join(", ")} (${x.intensity})`;
   return `${x.name} ${x.sets}×${x.reps||"?"}${x.weight?" @ "+x.weight:""} (${x.intensity})`;
 }
 
@@ -1905,6 +1936,7 @@ function bind(){
     else if (ds.wt) draft[+ds.wt].weight = t.value===""?null:+t.value;
     else if (ds.sdw){ const [i,j]=ds.sdw.split(":").map(Number); draft[i].setDetail[j].weight = t.value===""?null:+t.value; draft[i].weight = E.maxWeight(draft[i].setDetail); }
     else if (ds.sdr){ const [i,j]=ds.sdr.split(":").map(Number); draft[i].setDetail[j].reps = t.value; draft[i].reps = draft[i].setDetail.map(s=>s.reps||"").join("/"); }
+    else if (ds.sdi){ const [i,j]=ds.sdi.split(":").map(Number); if (t.value) draft[i].setDetail[j].intensity = t.value; else delete draft[i].setDetail[j].intensity; render(); }
     else if (t.id==="injtype"){ injForm.type = t.value; const [lo,hi]=injRefDays(); $("#injlo").value=lo; $("#injhi").value=hi; }
     else if (t.id==="sessdate") draftDate = t.value;
     else if (t.id==="chartsearch"){

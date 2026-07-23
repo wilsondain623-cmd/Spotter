@@ -129,7 +129,7 @@ const EXERCISE_LIBRARY = [
   { name: "Shoulder Taps", aliases: ["shoulder taps","shoulder tap"], p: ["core"], s: ["front-delts"] },
   { name: "Rope Machine Pull", aliases: ["rope machine pull","rope machine pulls","rope pulls"], p: ["lats"], s: ["biceps","forearms-grip","core"] },
   { name: "Conditioning", aliases: ["conditioning","field day","lateral slides","skipping","hops"], p: ["calves"], s: ["quads","hamstrings","core"], sys: 1.6 },
-  { name: "Running", aliases: ["run","running","jog","jogging","treadmill run","treadmill"], p: ["quads","calves"], s: ["hamstrings","glutes","core"], sys: 1.6 },
+  { name: "Running", aliases: ["ran", "run","running","jog","jogging","treadmill run","treadmill"], p: ["quads","calves"], s: ["hamstrings","glutes","core"], sys: 1.6 },
   { name: "Sprints", aliases: ["sprint","sprints","build-up sprints","hill sprints"], p: ["hamstrings","glutes"], s: ["quads","calves","core"], sys: 1.6 },
   { name: "Bike", aliases: ["bike","cycling","spin bike","stationary bike"], p: ["quads"], s: ["glutes","hamstrings","calves"], sys: 1.6 },
   { name: "Assault Bike", aliases: ["assault bike","air bike","echo bike"], p: ["quads"], s: ["biceps","triceps","calves","core"], sys: 1.6 },
@@ -185,10 +185,19 @@ function sessionFatigue(exercises) {
   const add = {};
   for (const m of MUSCLES) add[m] = 0;
   for (const ex of exercises) {
-    const mult = INTENSITY[ex.intensity] ?? 1.0;
-    const load = setLoadSum(ex.sets || 3) * repFactor(ex.reps);
-    for (const m of ex.primary || []) add[m] += BASE_PRIMARY * mult * load;
-    for (const m of ex.secondary || []) add[m] += BASE_PRIMARY * SECONDARY_FACTOR * mult * load;
+    let load;
+    if (ex.setDetail && ex.setDetail.length) {
+      load = 0;
+      ex.setDetail.forEach((sd, i) => {
+        const setF = i < 3 ? 1.0 : i < 5 ? 0.8 : 0.6;
+        const im = INTENSITY[sd.intensity ?? ex.intensity] ?? 1.0;
+        load += setF * im * repFactor(sd.reps);
+      });
+    } else {
+      load = (INTENSITY[ex.intensity] ?? 1.0) * setLoadSum(ex.sets || 3) * repFactor(ex.reps);
+    }
+    for (const m of ex.primary || []) add[m] += BASE_PRIMARY * load;
+    for (const m of ex.secondary || []) add[m] += BASE_PRIMARY * SECONDARY_FACTOR * load;
   }
   return add;
 }
@@ -209,7 +218,18 @@ function round1(x) { return Math.round(x * 10) / 10; }
 const SYS_BASE = 0.18, SYS_DECAY = 0.62;
 function sessionSys(exercises){
   let t = 0;
-  for (const ex of exercises) t += SYS_BASE * (INTENSITY[ex.intensity] ?? 1) * setLoadSum(ex.sets || 3) * (ex.sys || 1);
+  for (const ex of exercises) {
+    if (ex.setDetail && ex.setDetail.length) {
+      let s = 0;
+      ex.setDetail.forEach((sd, i) => {
+        const setF = i < 3 ? 1.0 : i < 5 ? 0.8 : 0.6;
+        s += setF * (INTENSITY[sd.intensity ?? ex.intensity] ?? 1);
+      });
+      t += SYS_BASE * s * (ex.sys || 1);
+    } else {
+      t += SYS_BASE * (INTENSITY[ex.intensity] ?? 1) * setLoadSum(ex.sets || 3) * (ex.sys || 1);
+    }
+  }
   return t;
 }
 function applySys(v, lastUpdated, date, exercises){
@@ -277,19 +297,25 @@ function parseSetsReps(seg) {
    or reps@weight like "10@135". Returns [{weight, reps}] in order found. */
 function parseSetTokens(seg) {
   const found = [];
-  const rx = /(\d+(?:\.\d+)?)\s*(?:[x×]|by)\s*(\d+)\b/gi;
+  const rx = /(\d+(?:\.\d+)?)\s*(?:[x×]|by|for)\s*(\d+)\b/gi;
   let m;
   while ((m = rx.exec(seg))) {
     const a = +m[1], b = +m[2];
-    if (a >= 20) found.push({ weight: a, reps: String(b), idx: m.index });
+    if (a >= 20) found.push({ weight: a, reps: String(b), idx: m.index, end: m.index + m[0].length });
   }
   const rx2 = /\b(\d{1,2})\s*@\s*(\d+(?:\.\d+)?)/g;
   while ((m = rx2.exec(seg))) {
     const r = +m[1], w = +m[2];
-    if (w >= 20) found.push({ weight: w, reps: String(r), idx: m.index });
+    if (w >= 20) found.push({ weight: w, reps: String(r), idx: m.index, end: m.index + m[0].length });
   }
   found.sort((a, b) => a.idx - b.idx);
-  return found.map(({ weight, reps }) => ({ weight, reps }));
+  /* per-set intensity: an intensity word between this set token and the next belongs to this set */
+  return found.map((t, i) => {
+    const tail = seg.slice(t.end, i + 1 < found.length ? found[i + 1].idx : seg.length);
+    let int_ = null;
+    for (const w of INTENSITY_WORDS) if (w.rx.test(tail)) { int_ = w.key; break; }
+    return int_ ? { weight: t.weight, reps: t.reps, intensity: int_ } : { weight: t.weight, reps: t.reps };
+  });
 }
 
 function parseWeight(seg) {
@@ -428,7 +454,7 @@ function preview(text){
   if (!text.trim()) return "";
   const { parsed, unmatched } = E.parseSession(text, customLib);
   if (!parsed.length && !unmatched.length) return `<div class="muted" style="margin-top:10px">Nothing recognized yet — try "bench 4x8 at 185, incline press 3x10".</div>`;
-  const rows = parsed.map(p=>`<div class="pex"><div class="n">${esc(p.name)}</div><div class="m">${p.setDetail?p.setDetail.map(s=>`${s.weight??"–"}×${s.reps||"?"}`).join(", "):`${p.sets}×${p.reps||"?"}${p.weight?" @ "+p.weight:""}`} · ${p.intensity}</div></div>`).join("");
+  const rows = parsed.map(p=>`<div class="pex"><div class="n">${esc(p.name)}</div><div class="m">${p.setDetail?p.setDetail.map(s=>`${s.weight??"–"}×${s.reps||"?"}${s.intensity?" "+s.intensity:""}`).join(", "):`${p.sets}×${p.reps||"?"}${p.weight?" @ "+p.weight:""}`} · ${p.intensity}</div></div>`).join("");
   const unk = unmatched.map(u=>`<div class="pex unk"><div class="n">? ${esc(u.raw)}</div><div class="m">your coach will sort this one out</div></div>`).join("");
   return `<div class="prev"><div class="muted" style="margin-bottom:6px">Preview — this is what your coach receives:</div>${rows}${unk}</div>`;
 }
