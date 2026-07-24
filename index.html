@@ -679,6 +679,33 @@ function duoPartner(){ return duoPartnerId ? S.clients.find(x=>x.id===duoPartner
 function activeDraft(){ return (duoPartnerId && duoActive==="b") ? duoDraftB : draft; }
 function activeDraftClient(){ return (duoPartnerId && duoActive==="b") ? duoPartner() : client(); }
 function resetDuo(){ duoPartnerId = null; duoDraftB = []; duoActive = "a"; }
+
+/* crash-proof drafts: every change is written to storage instantly and restored on relaunch */
+const DRAFT_KEY = "dwil-spotter-draft";
+let draftText = "";
+function persistDraft(){
+  try {
+    if (draft.length || duoDraftB.length || draftText.trim()){
+      store.setItem(DRAFT_KEY, JSON.stringify({
+        clientId: view && view.clientId, draft, duoPartnerId, duoDraftB, duoActive,
+        draftDate, draftTitle, draftText, savedAt: Date.now() }));
+    } else store.removeItem(DRAFT_KEY);
+  } catch(e){}
+}
+function restoreDraft(){
+  try {
+    const raw = store.getItem(DRAFT_KEY); if (!raw) return;
+    const d = JSON.parse(raw);
+    if (!d || (!(d.draft||[]).length && !(d.duoDraftB||[]).length && !(d.draftText||"").trim())) return;
+    const c = S.clients.find(x=>x.id===d.clientId); if (!c) { store.removeItem(DRAFT_KEY); return; }
+    draft = d.draft||[]; duoDraftB = d.duoDraftB||[]; duoActive = d.duoActive||"a";
+    duoPartnerId = (d.duoPartnerId && S.clients.some(x=>x.id===d.duoPartnerId)) ? d.duoPartnerId : null;
+    if (!duoPartnerId) { duoDraftB = []; duoActive = "a"; }
+    draftDate = d.draftDate||todayISO(); draftTitle = d.draftTitle||""; draftText = d.draftText||"";
+    view = { page:"client", clientId: c.id, tab:"log" };
+    setTimeout(()=>toast(`Unsaved session for ${c.name} restored — nothing was lost`), 600);
+  } catch(e){}
+}
 let chartRange = "3m";
 let chartSearch = "";
 let pendingSubs = null;   /* [{id,client,date,title,text}] fetched from worker */
@@ -824,6 +851,7 @@ function bodyMap(cur, injured){
 
 let _pendingFetched = false;
 function render(){
+  persistDraft();
   const app = $("#app");
   if (view.page === "review") app.innerHTML = reviewView();
   else if (view.page === "roster") app.innerHTML = rosterView();
@@ -1148,7 +1176,7 @@ function tabLog(c){
     </div>
     <div class="muted" style="margin-bottom:8px;font-size:11px">One dictation, two profiles. Tap a name, adjust their weights/sets — removals apply only to them. Injury flags follow whoever you are editing.</div>` : "";
   return `<div class="card">
-    <textarea id="logtext" placeholder="e.g. bench press 135x10, 155x8, 185x6 heavy — or back squats 4x6 at 185"></textarea>
+    <textarea id="logtext" placeholder="e.g. bench press 135x10, 155x8, 185x6 heavy — or back squats 4x6 at 185">${esc(draftText)}</textarea>
     <div class="row" style="gap:8px;margin-top:10px">
       <button class="btn2 grow" data-act="parse">Parse text</button>
       <button class="btn2 grow" data-act="picker">+ Quick add</button>
@@ -1515,6 +1543,8 @@ function parseText(){
   for (const p of parsed){ draft.push(p); if (duoPartnerId) duoDraftB.push(JSON.parse(JSON.stringify(p))); }
   for (const u of unmatched){ draft.push({ ...u, unmatched:true }); if (duoPartnerId) duoDraftB.push({ ...JSON.parse(JSON.stringify(u)), unmatched:true }); }
   if (!parsed.length && !unmatched.length) toast("Nothing parsed — include sets like 3x10, or use + Quick add > Create new exercise");
+  else draftText = "";
+  persistDraft();
   render();
 }
 
@@ -1581,7 +1611,7 @@ function saveSession(){
   if (itemsA.length) prMsgA = applyParsedSession(c, itemsA, draftDate, title);
   if (p && itemsB.length) prMsgB = applyParsedSession(p, itemsB, draftDate, title);
   const wasDuo = !!p, pName = p ? p.name : "";
-  draft = []; resetDuo(); draftDate = todayISO(); draftTitle = "";
+  draft = []; resetDuo(); draftDate = todayISO(); draftTitle = ""; draftText = ""; store.removeItem(DRAFT_KEY);
   save();
   view.tab = "fatigue"; render();
   if (itemsA.length) checkPackRenewal(c);
@@ -1905,7 +1935,7 @@ function bind(){
     const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
     if (!t) return;
     const ds = t.dataset;
-    if (ds.open){ if ((draft.length||duoDraftB.length) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; resetDuo(); chartSearch=""; render(); }
+    if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
     else if (ds.bmv){ toast(ds.bmv); }
     else if (ds.crange){ chartRange = ds.crange; render(); }
     else if (ds.subapprove!==undefined && ds.subapprove!=="") approveSub(+ds.subapprove);
@@ -1963,7 +1993,7 @@ function bind(){
     else if (ds.close && e.target.classList.contains("modal-bg")){ assignTarget=null; pickerOpen=false; render(); }
     else if (ds.act){
       const a=ds.act;
-      if (a==="back"){ if ((draft.length||duoDraftB.length) && !confirm("Discard the unsaved session draft?")) return; draft=[]; draftTitle=""; resetDuo(); view={page:"roster",clientId:null,tab:"fatigue"}; render(); }
+      if (a==="back"){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); view={page:"roster",clientId:null,tab:"fatigue"}; render(); }
       else if (a==="parse") parseText();
       else if (a==="picker"){ pickerOpen=true; render(); setTimeout(()=>$("#picksearch")?.focus(),50); }
       else if (a==="new-exercise"){ pickerOpen=false; assignTarget=-1; assignSel={}; view.tab="log"; render(); }
@@ -2002,6 +2032,7 @@ function bind(){
   };
   app.oninput = e => {
     const t = e.target, ds = t.dataset;
+    if (t.id==="logtext"){ draftText = t.value; persistDraft(); return; }
     if (t.id==="duoSel"){ duoPartnerId = t.value || null; duoActive = "a";
       if (duoPartnerId && draft.length && !duoDraftB.length) duoDraftB = JSON.parse(JSON.stringify(draft));
       if (!duoPartnerId) duoDraftB = [];
@@ -2013,8 +2044,9 @@ function bind(){
     else if (ds.sdw){ const [i,j]=ds.sdw.split(":").map(Number); AD[i].setDetail[j].weight = t.value===""?null:+t.value; AD[i].weight = E.maxWeight(AD[i].setDetail); }
     else if (ds.sdr){ const [i,j]=ds.sdr.split(":").map(Number); AD[i].setDetail[j].reps = t.value; AD[i].reps = AD[i].setDetail.map(s=>s.reps||"").join("/"); }
     else if (ds.sdi){ const [i,j]=ds.sdi.split(":").map(Number); if (t.value) AD[i].setDetail[j].intensity = t.value; else delete AD[i].setDetail[j].intensity; render(); }
+    if (ds.sets!==undefined||ds.reps!==undefined||ds.wt!==undefined||ds.sdw!==undefined||ds.sdr!==undefined||ds.sdi!==undefined) persistDraft();
     else if (t.id==="injtype"){ injForm.type = t.value; const [lo,hi]=injRefDays(); $("#injlo").value=lo; $("#injhi").value=hi; }
-    else if (t.id==="sessdate") draftDate = t.value;
+    else if (t.id==="sessdate"){ draftDate = t.value; persistDraft(); }
     else if (t.id==="chartsearch"){
       chartSearch = t.value;
       $("#chartlist").innerHTML = buildChartCards(client());
@@ -2033,6 +2065,7 @@ function bind(){
   };
 }
 
+restoreDraft();
 render();
 
 </script>
