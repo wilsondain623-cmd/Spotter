@@ -340,6 +340,7 @@ function parseSession(text, customLib) {
     .map(s => s && s.trim()).filter(s => s && s.length > 1);
   const parsed = [], unmatched = [];
   let last = null; /* most recent item (parsed or unmatched) for pyramid continuation */
+  const sideOf = s => /\b(left|l)\b/i.test(s) ? "L" : /\b(right|r)\b/i.test(s) ? "R" : null;
   const appendTokens = (item, tokens) => {
     if (!item.setDetail) {
       item.setDetail = [];
@@ -359,6 +360,8 @@ function parseSession(text, customLib) {
     if (ex) {
       const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: detectIntensity(seg), raw: seg };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
+      const sd_ = sideOf(seg);
+      if (sd_){ base.side = sd_; base.name = ex.name + " (" + sd_ + ")"; }
       let item;
       if (tokens.length) {
         item = { ...base, setDetail: tokens, sets: tokens.length,
@@ -370,8 +373,20 @@ function parseSession(text, customLib) {
       }
       parsed.push(item); last = item;
     } else if (tokens.length && !sr && last) {
-      /* bare weight×reps segment: continuation of previous exercise (pyramid sets) */
-      appendTokens(last, tokens);
+      const segSide = sideOf(seg);
+      if (segSide && last.side && segSide !== last.side) {
+        /* "single leg rdl left 95x8, right 45x10" — same lift, other side, own numbers */
+        const baseName = last.name.replace(/ \((L|R)\)$/, "");
+        const item = { name: baseName + " (" + segSide + ")", primary: last.primary, secondary: last.secondary,
+          side: segSide, intensity: detectIntensity(seg) === "moderate" ? last.intensity : detectIntensity(seg),
+          raw: seg, setDetail: tokens, sets: tokens.length,
+          reps: tokens.map(t => t.reps).join("/"), weight: maxWeight(tokens),
+          ...(last.bw ? { bw: true } : {}), ...(last.unmatched ? { unmatched: true } : {}) };
+        (last.unmatched ? unmatched : parsed).push(item); last = item;
+      } else {
+        /* bare weight×reps segment: continuation of previous exercise (pyramid sets) */
+        appendTokens(last, tokens);
+      }
     } else if (sr || tokens.length) {
       const item = { raw: seg, sets: sr ? sr.sets : tokens.length, reps: sr ? sr.reps : tokens.map(t=>t.reps).join("/"),
         weight: tokens.length ? maxWeight(tokens) : parseWeight(seg),

@@ -404,6 +404,7 @@ function parseSession(text, customLib) {
     .map(s => s && s.trim()).filter(s => s && s.length > 1);
   const parsed = [], unmatched = [];
   let last = null; /* most recent item (parsed or unmatched) for pyramid continuation */
+  const sideOf = s => /\b(left|l)\b/i.test(s) ? "L" : /\b(right|r)\b/i.test(s) ? "R" : null;
   const appendTokens = (item, tokens) => {
     if (!item.setDetail) {
       item.setDetail = [];
@@ -423,6 +424,8 @@ function parseSession(text, customLib) {
     if (ex) {
       const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: detectIntensity(seg), raw: seg };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
+      const sd_ = sideOf(seg);
+      if (sd_){ base.side = sd_; base.name = ex.name + " (" + sd_ + ")"; }
       let item;
       if (tokens.length) {
         item = { ...base, setDetail: tokens, sets: tokens.length,
@@ -434,8 +437,20 @@ function parseSession(text, customLib) {
       }
       parsed.push(item); last = item;
     } else if (tokens.length && !sr && last) {
-      /* bare weight×reps segment: continuation of previous exercise (pyramid sets) */
-      appendTokens(last, tokens);
+      const segSide = sideOf(seg);
+      if (segSide && last.side && segSide !== last.side) {
+        /* "single leg rdl left 95x8, right 45x10" — same lift, other side, own numbers */
+        const baseName = last.name.replace(/ \((L|R)\)$/, "");
+        const item = { name: baseName + " (" + segSide + ")", primary: last.primary, secondary: last.secondary,
+          side: segSide, intensity: detectIntensity(seg) === "moderate" ? last.intensity : detectIntensity(seg),
+          raw: seg, setDetail: tokens, sets: tokens.length,
+          reps: tokens.map(t => t.reps).join("/"), weight: maxWeight(tokens),
+          ...(last.bw ? { bw: true } : {}), ...(last.unmatched ? { unmatched: true } : {}) };
+        (last.unmatched ? unmatched : parsed).push(item); last = item;
+      } else {
+        /* bare weight×reps segment: continuation of previous exercise (pyramid sets) */
+        appendTokens(last, tokens);
+      }
     } else if (sr || tokens.length) {
       const item = { raw: seg, sets: sr ? sr.sets : tokens.length, reps: sr ? sr.reps : tokens.map(t=>t.reps).join("/"),
         weight: tokens.length ? maxWeight(tokens) : parseWeight(seg),
@@ -1124,7 +1139,9 @@ function tabBrief(c){
 function draftItemHtml(it, i){
   const chips = ["warmup","moderate","heavy","max"].map(k=>
     `<span class="ichip ${it.intensity===k?"on":""}" data-int="${i}:${k}">${k}</span>`).join("")
-    + `<span class="ichip ${it.bw?"on":""}" data-bwtoggle="${i}" style="${it.bw?"":"opacity:.75"}">BW</span>`;
+    + `<span class="ichip ${it.bw?"on":""}" data-bwtoggle="${i}" style="${it.bw?"":"opacity:.75"}">BW</span>`
+    + `<span class="ichip ${it.side==="L"?"on":""}" data-sideto="${i}:L" style="${it.side==="L"?"":"opacity:.75"}">L</span>`
+    + `<span class="ichip ${it.side==="R"?"on":""}" data-sideto="${i}:R" style="${it.side==="R"?"":"opacity:.75"}">R</span>`;
   let body;
   if (it.unmatched){
     body = `<div class="minirow"><button class="btn-sm" data-assign="${i}">Assign muscles →</button></div>`;
@@ -1585,7 +1602,8 @@ function normalizeItem(it){
 }
 
 function exMuscles(name){
-  const ex = E.matchExercise(name, S.customExercises);
+  const base = String(name||"").replace(/ \((L|R)\)$/, "");
+  const ex = E.matchExercise(base, S.customExercises);
   return ex ? { p: ex.p, s: ex.s, sys: ex.sys || 1 } : { p: [], s: [], sys: 1 };
 }
 
@@ -1627,7 +1645,7 @@ function rebuildClient(c){
 /* Save a parsed session for a specific client (used by log tab + client-submission review) */
 function applyParsedSession(c, items, date, title, solo){
   const before = {}; for (const p of c.prs) before[p.exercise] = { w: p.weight, r: p.reps, bw: !!p.bw };
-  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(setDetail?{setDetail}:{})})) });
+  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw,side})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(side?{side}:{}),...(setDetail?{setDetail}:{})})) });
   c.sessions.sort((a,b)=>b.date.localeCompare(a.date));
   rebuildClient(c);
   let prMsg = "";
@@ -1974,7 +1992,7 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
@@ -2014,6 +2032,11 @@ function bind(){
     else if (ds.bm){ const [m,v]=ds.bm.split(":"); toast(`${m}: ${v} / 10`); }
     else if (ds.tab){ view.tab=ds.tab; render(); }
     else if (ds.duoside){ duoActive = ds.duoside; render(); }
+    else if (ds.sideto){ const [i,s] = ds.sideto.split(":"); const it = activeDraft()[+i];
+      const base = it.name.replace(/ \((L|R)\)$/, "");
+      it.side = it.side === s ? null : s;
+      it.name = it.side ? `${base} (${it.side})` : base;
+      persistDraft(); render(); }
     else if (ds.bwtoggle!==undefined && ds.bwtoggle!==""){ const it = activeDraft()[+ds.bwtoggle];
       it.bw = !it.bw;
       if (it.bw){ it.weight = null; if (it.setDetail) for (const sd of it.setDetail) sd.weight = null; }
