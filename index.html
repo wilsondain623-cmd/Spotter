@@ -1335,7 +1335,7 @@ function recTrendChart(c){
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block;margin-top:8px">${out}</svg>`;
 }
 
-let injForm = { type:"strain", grade:"1", chronic:false };
+let injForm = { type:"strain", grade:"1", chronic:false, label:"", onset:null, lo:null, hi:null };
 let injSel = {};
 
 function injRefDays(){ const r = INJURY_REFS[injForm.type]||INJURY_REFS.other; return r.g[injForm.grade]||r.g["1"]; }
@@ -1421,7 +1421,8 @@ function tabInjuries(c){
     </div>`;
   }).join("") || `<div class="empty">No active injuries.</div>`;
 
-  const [lo, hi] = injRefDays();
+  const [aLo, aHi] = injRefDays();
+  const lo = injForm.lo ?? aLo, hi = injForm.hi ?? aHi;
   const grid = E.MUSCLES.map(m=>`<div class="mg ${injSel[m]?"p":""}" data-injmus="${m}">${m}</div>`).join("");
   const typeOpts = Object.keys(INJURY_REFS).map(k=>`<option value="${k}" ${injForm.type===k?"selected":""}>${INJURY_REFS[k].label}</option>`).join("");
   const gradeChips = ["1","2","3"].map(g=>`<span class="ichip ${injForm.grade===g?"on":""}" data-injgrade="${g}">grade ${g}</span>`).join("");
@@ -1430,12 +1431,13 @@ function tabInjuries(c){
 
   return `${cards}
   <div class="card"><h2 style="margin-top:0">Log an injury</h2>
-    <input type="text" id="injlabel" placeholder="e.g. Right oblique strain">
+    <input type="text" id="injlabel" placeholder="e.g. Right oblique strain" value="${esc(injForm.label||"")}">
     <div class="minirow"><span class="lbl">Type</span><select id="injtype">${typeOpts}</select></div>
     <div class="ichips" style="margin-top:8px">${gradeChips}<span class="ichip ${injForm.chronic?"on":""}" data-injchronic="1">∞ chronic / recurring</span></div>
     <div class="muted" style="margin:8px 0 4px;font-size:11px">Affected muscle groups (tap):</div>
     <div class="mgrid">${grid}</div>
-    <div class="minirow"><span class="lbl">Onset</span><input type="date" id="injonset" value="${todayISO()}"></div>
+    <div class="minirow"><span class="lbl">Onset</span><input type="date" id="injonset" value="${injForm.onset||todayISO()}"></div>
+    ${injForm.onset && injForm.onset!==todayISO() ? `<div class="muted" style="font-size:11px;margin:2px 0 4px">That was ${E.daysBetween(injForm.onset, todayISO())} days ago — the day counter and recovery window will start from there.</div>` : ""}
     ${injForm.chronic?`<div class="muted" style="margin:6px 0;font-size:11px">Chronic mode — no recovery window. It warns on loading drafts only when the latest pain check-in (within 7 days) is 4+/10.</div>`:`<div class="minirow"><span class="lbl">Typical</span>
       <input type="number" style="width:64px" id="injlo" value="${lo}"> <span class="lbl">to</span>
       <input type="number" style="width:64px" id="injhi" value="${hi}"> <span class="lbl">days (editable)</span></div>`}
@@ -1941,7 +1943,7 @@ function bind(){
     else if (ds.subapprove!==undefined && ds.subapprove!=="") approveSub(+ds.subapprove);
     else if (ds.subreject!==undefined && ds.subreject!=="") rejectSub(+ds.subreject);
     else if (ds.injmus){ injSel[ds.injmus] = !injSel[ds.injmus]; if(!injSel[ds.injmus]) delete injSel[ds.injmus]; render(); }
-    else if (ds.injgrade){ injForm.grade = ds.injgrade; render(); }
+    else if (ds.injgrade){ injForm.grade = ds.injgrade; injForm.lo = null; injForm.hi = null; render(); }
     else if (ds.injchronic){ injForm.chronic = !injForm.chronic; render(); }
     else if (ds.injci){ const c=client(); const i=c.injuries.find(x=>x.id===ds.injci); if(!i) return;
       const pv = $("#pain-"+ds.injci).value, bv = $("#painb-"+ds.injci).value, wv = $("#painw-"+ds.injci).value, nv = $("#cinote-"+ds.injci).value.trim();
@@ -2010,21 +2012,25 @@ function bind(){
       else if (a==="review"){ view={page:"review"}; render(); }
       else if (a==="refreshsubs"){ toast("Checking for submissions…"); fetchPending(); }
       else if (a==="add-injury"){ const c=client();
-        const label = $("#injlabel").value.trim();
+        const label = ($("#injlabel").value||injForm.label||"").trim();
         const muscles = Object.keys(injSel);
         if (!label){ toast("Name the injury"); return; }
         if (!muscles.length){ toast("Tap at least one affected muscle group"); return; }
+        const onset = $("#injonset").value || injForm.onset || todayISO();
+        const wasChronic = injForm.chronic;
         c.injuries = c.injuries||[];
         if (injForm.chronic){
           c.injuries.push({ id:"inj"+Date.now(), label, type:injForm.type, grade:injForm.grade, chronic:true,
-            muscles, onset:$("#injonset").value||todayISO(), status:"active", checkIns:[] });
+            muscles, onset, status:"active", checkIns:[] });
         } else {
-          const lo = +($("#injlo").value)||14, hi = +($("#injhi").value)||28;
+          const [aLo2, aHi2] = injRefDays();
+          const lo = +($("#injlo").value) || injForm.lo || aLo2, hi = +($("#injhi").value) || injForm.hi || aHi2;
           c.injuries.push({ id:"inj"+Date.now(), label, type:injForm.type, grade:injForm.grade,
-            muscles, onset:$("#injonset").value||todayISO(), expLo:Math.min(lo,hi), expHi:Math.max(lo,hi),
+            muscles, onset, expLo:Math.min(lo,hi), expHi:Math.max(lo,hi),
             status:"active", checkIns:[] });
         }
-        injSel={}; save(); render(); toast(injForm.chronic?`${label} logged — chronic tracking is on`:`${label} logged — it now shows on the body map and brief`); }
+        injSel={}; injForm = { type:"strain", grade:"1", chronic:false, label:"", onset:null, lo:null, hi:null };
+        save(); render(); toast(wasChronic?`${label} logged — chronic tracking is on`:`${label} logged — it now shows on the body map and brief`); }
       else if (a==="whoop-link"){ const l = whoopConnectLink(client());
         if (l && typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Connect link copied — text it to the client")).catch(()=>prompt("Send this link to the client:", l));
         else if (l) prompt("Send this link to the client:", l); }
@@ -2045,7 +2051,11 @@ function bind(){
     else if (ds.sdr){ const [i,j]=ds.sdr.split(":").map(Number); AD[i].setDetail[j].reps = t.value; AD[i].reps = AD[i].setDetail.map(s=>s.reps||"").join("/"); }
     else if (ds.sdi){ const [i,j]=ds.sdi.split(":").map(Number); if (t.value) AD[i].setDetail[j].intensity = t.value; else delete AD[i].setDetail[j].intensity; render(); }
     if (ds.sets!==undefined||ds.reps!==undefined||ds.wt!==undefined||ds.sdw!==undefined||ds.sdr!==undefined||ds.sdi!==undefined) persistDraft();
-    else if (t.id==="injtype"){ injForm.type = t.value; const [lo,hi]=injRefDays(); $("#injlo").value=lo; $("#injhi").value=hi; }
+    else if (t.id==="injtype"){ injForm.type = t.value; injForm.lo = null; injForm.hi = null; const [lo,hi]=injRefDays(); $("#injlo").value=lo; $("#injhi").value=hi; }
+    else if (t.id==="injlabel") injForm.label = t.value;
+    else if (t.id==="injonset"){ injForm.onset = t.value; render(); }
+    else if (t.id==="injlo") injForm.lo = +t.value||null;
+    else if (t.id==="injhi") injForm.hi = +t.value||null;
     else if (t.id==="sessdate"){ draftDate = t.value; persistDraft(); }
     else if (t.id==="chartsearch"){
       chartSearch = t.value;
