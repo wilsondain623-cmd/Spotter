@@ -358,6 +358,7 @@ function parseSession(text, customLib) {
     const ex = matchExercise(seg, customLib);
     if (ex) {
       const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: detectIntensity(seg), raw: seg };
+      if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
       let item;
       if (tokens.length) {
         item = { ...base, setDetail: tokens, sets: tokens.length,
