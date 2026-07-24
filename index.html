@@ -339,15 +339,15 @@ function parseSetsReps(seg) {
   }
   if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:min|mins|minutes)\b/i))) {
     const mins = +m[1];
-    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${mins}min` };
+    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${mins}min`, dur: mins };
   }
   if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:miles?|mi)\b/i))) {
     const mins = +m[1] * 9;
-    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${m[1]}mi` };
+    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${m[1]}mi`, dist: `${m[1]}mi` };
   }
   if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:km|kilometers?)\b/i))) {
     const mins = +m[1] * 5.6;
-    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${m[1]}km` };
+    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${m[1]}km`, dist: `${m[1]}km` };
   }
   if ((m = seg.match(/(\d+)\s*sets?\s*(?:of\s*(\d+)(?:\s*[-–]\s*(\d+))?)?/i))) {
     let reps = m[3] ? `${m[2]}-${m[3]}` : (m[2] || "");
@@ -431,7 +431,8 @@ function parseSession(text, customLib) {
         item = { ...base, setDetail: tokens, sets: tokens.length,
           reps: tokens.map(t => t.reps).join("/"), weight: maxWeight(tokens) };
       } else if (sr) {
-        item = { ...base, sets: sr.sets, reps: sr.reps, weight: parseWeight(seg) };
+        item = { ...base, sets: sr.sets, reps: sr.reps, weight: parseWeight(seg),
+          ...(sr.dur ? { dur: sr.dur } : {}), ...(sr.dist ? { dist: sr.dist } : {}) };
       } else {
         item = { ...base, sets: 3, reps: "", weight: parseWeight(seg), assumedSets: true };
       }
@@ -1141,7 +1142,8 @@ function draftItemHtml(it, i){
     `<span class="ichip ${it.intensity===k?"on":""}" data-int="${i}:${k}">${k}</span>`).join("")
     + `<span class="ichip ${it.bw?"on":""}" data-bwtoggle="${i}" style="${it.bw?"":"opacity:.75"}">BW</span>`
     + `<span class="ichip ${it.side==="L"?"on":""}" data-sideto="${i}:L" style="${it.side==="L"?"":"opacity:.75"}">L</span>`
-    + `<span class="ichip ${it.side==="R"?"on":""}" data-sideto="${i}:R" style="${it.side==="R"?"":"opacity:.75"}">R</span>`;
+    + `<span class="ichip ${it.side==="R"?"on":""}" data-sideto="${i}:R" style="${it.side==="R"?"":"opacity:.75"}">R</span>`
+    + (it.setDetail?``:`<span class="ichip ${it.dur?"on":""}" data-durtoggle="${i}" style="${it.dur?"":"opacity:.75"}">⏱ time</span>`);
   let body;
   if (it.unmatched){
     body = `<div class="minirow"><button class="btn-sm" data-assign="${i}">Assign muscles →</button></div>`;
@@ -1160,7 +1162,11 @@ function draftItemHtml(it, i){
       <div class="ichips">${chips}</div>
       <div class="muted" style="font-size:10px;margin-top:2px">Chips set the default intensity — the dropdown overrides it per set.</div>`;
   } else {
-    body = `<div class="minirow">
+    body = (it.dur || it.dist) ? `<div class="minirow">
+      ${it.dist?`<span class="lbl">distance</span><input type="text" style="width:80px" value="${esc(it.dist)}" data-dist="${i}">`:`<span class="lbl">time</span><input type="number" inputmode="numeric" style="width:74px" value="${it.dur??""}" data-dur="${i}"><span class="lbl">min</span>`}
+      <span class="lbl" style="color:var(--dim);font-size:10px">feeds whole-body load, not per-muscle weights</span>
+    </div>
+    <div class="ichips">${chips}</div>` : `<div class="minirow">
       <span class="lbl">sets</span><input type="number" inputmode="numeric" style="width:58px" value="${it.sets}" data-sets="${i}">
       <span class="lbl">reps</span><input type="text" style="width:70px${!it.bw&&it.weight!=null&&!it.reps?";border-color:#c95f5f":""}" value="${esc(it.reps||"")}" data-reps="${i}" placeholder="reps?">
       ${it.bw?`<span class="lbl" style="color:var(--ice)">bodyweight</span>`:`<span class="lbl">lbs</span><input type="number" inputmode="decimal" style="width:74px" value="${it.weight??""}" data-wt="${i}">`}
@@ -1209,6 +1215,8 @@ function tabLog(c){
 }
 
 function fmtExercise(x){
+  if (x.dur) return `${x.name} ${x.dur} min (${x.intensity})`;
+  if (x.dist) return `${x.name} ${x.dist} (${x.intensity})`;
   if (x.bw){
     if (x.setDetail && x.setDetail.length) return `${x.name} BW ${x.setDetail.map(s=>`×${s.reps||"?"}${s.intensity&&s.intensity!==x.intensity?" "+s.intensity:""}`).join(", ")} (${x.intensity})`;
     return `${x.name} BW ${x.sets}×${x.reps||"?"} (${x.intensity})`;
@@ -1231,7 +1239,10 @@ function liftSeries(c){
     for (const x of s.exercises){
       let top = null, vol = 0;
       const e1rm = (w, r) => (!r || r <= 1) ? w : Math.round(w * (1 + Math.min(r, 12) / 30));
-      if (x.bw){
+      if (x.dur || x.dist){
+        const val = x.dur || parseFloat(x.dist) || 0;
+        if (val){ top = { w:null, r:null, e1: val, du:true, unit: x.dur ? "min" : (String(x.dist).toLowerCase().includes("mi") ? "mi" : "km") }; vol = val; }
+      } else if (x.bw){
         if (x.setDetail && x.setDetail.length){
           for (const sd of x.setDetail){ const r = repN(sd.reps); vol += r; if (!top || r > top.r) top = { w:null, r, e1:r, bw:true }; }
         } else {
@@ -1251,7 +1262,7 @@ function liftSeries(c){
         vol = x.weight * r * (x.sets || 1);
         top = { w: x.weight, r, e1: e1rm(x.weight, r) };
       }
-      if (top){ (map[x.name] = map[x.name] || []).push({ date: s.date, w: top.w, r: top.r, e1: top.e1, ...(top.bw?{bw:true}:{}), vol }); }
+      if (top){ (map[x.name] = map[x.name] || []).push({ date: s.date, w: top.w, r: top.r, e1: top.e1, ...(top.bw?{bw:true}:{}), ...(top.du?{du:true, unit:top.unit}:{}), vol }); }
     }
   }
   return map;
@@ -1288,12 +1299,14 @@ function chartSvg(pts){
   /* dots + weight×reps labels + x dates */
   for (let i = 0; i < pts.length; i++){
     const p = pts[i], x = X(i), y = Y(p.e1);
-    const detail = p.bw
+    const detail = p.du
+      ? `${fmtDate(p.date)} · ${p.e1} ${p.unit||"min"}`
+      : p.bw
       ? `${fmtDate(p.date)} · top set ${p.r} reps at bodyweight${p.vol?` · ${Math.round(p.vol)} total reps`:""}`
       : `${fmtDate(p.date)} · best set ${p.r?`${p.w}×${p.r}`:p.w+" lbs (no reps logged)"} · est 1RM ${p.e1} lbs${p.vol?` · session volume ${Math.round(p.vol)}`:""}`;
     out += `<circle cx="${x}" cy="${y}" r="4.5" fill="#A8C4E0" stroke="#0A0E18" stroke-width="1.5" data-bmv="${detail}"><title>${detail}</title></circle>`;
     const lx = Math.min(Math.max(x, L+20), W-R-22);
-    out += `<text x="${lx}" y="${y-9}" text-anchor="middle" fill="#CFD3DC" font-size="11" font-weight="700">${p.bw?`${p.r} reps`:(p.r?`${p.w}×${p.r}`:p.w)}</text>`;
+    out += `<text x="${lx}" y="${y-9}" text-anchor="middle" fill="#CFD3DC" font-size="11" font-weight="700">${p.du?`${p.e1} ${p.unit||"min"}`:p.bw?`${p.r} reps`:(p.r?`${p.w}×${p.r}`:p.w)}</text>`;
     const d = new Date(p.date+"T00:00:00");
     const lbl = (d.getMonth()+1)+"/"+d.getDate();
     if (pts.length <= 8 || i === 0 || i === pts.length-1 || i % Math.ceil(pts.length/6) === 0)
@@ -1315,15 +1328,20 @@ function buildChartCards(c){
   if (!entries.length) return `<div class="empty">No weighted lifts match — widen the range or clear the search.</div>`;
   return entries.map(({n, pts})=>{
     const bwMode = pts.some(p=>p.bw);
+    const duMode = pts.some(p=>p.du);
     const last = pts[pts.length-1];
     const first = pts[0];
-    const delta = pts.length > 1 ? (last.e1 - first.e1) : 0;
-    const unit = bwMode ? "reps" : "lbs e1RM";
+    const delta = pts.length > 1 ? (Math.round((last.e1 - first.e1)*10)/10) : 0;
+    const unit = duMode ? (last.unit||"min") : bwMode ? "reps" : "lbs e1RM";
     const trend = pts.length > 1 ? ` · ${delta >= 0 ? "+" : ""}${delta} ${unit} since ${fmtDate(first.date)}` : " · first data point";
-    const head = bwMode
+    const head = duMode
+      ? `last session ${last.e1} ${last.unit||"min"}${trend}`
+      : bwMode
       ? `top set ${last.e1} reps (bodyweight)${trend}`
       : `est 1RM ${last.e1} lbs (best set ${last.r?`${last.w}×${last.r}`:last.w})${trend}`;
-    const foot = bwMode
+    const foot = duMode
+      ? `Bold line: session duration/distance · Hover or tap points for detail`
+      : bwMode
       ? `Bold line: top-set reps at bodyweight · Thin line: total session reps · Hover or tap points for detail`
       : `Bold line: estimated 1RM (Epley) · Labels: actual best set weight×reps · Thin line: session volume · Hover or tap points for detail`;
     return `<div class="card">
@@ -1645,7 +1663,7 @@ function rebuildClient(c){
 /* Save a parsed session for a specific client (used by log tab + client-submission review) */
 function applyParsedSession(c, items, date, title, solo){
   const before = {}; for (const p of c.prs) before[p.exercise] = { w: p.weight, r: p.reps, bw: !!p.bw };
-  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw,side})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(side?{side}:{}),...(setDetail?{setDetail}:{})})) });
+  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw,side,dur,dist})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(side?{side}:{}),...(dur?{dur}:{}),...(dist?{dist}:{}),...(setDetail?{setDetail}:{})})) });
   c.sessions.sort((a,b)=>b.date.localeCompare(a.date));
   rebuildClient(c);
   let prMsg = "";
@@ -1992,7 +2010,7 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
@@ -2032,6 +2050,10 @@ function bind(){
     else if (ds.bm){ const [m,v]=ds.bm.split(":"); toast(`${m}: ${v} / 10`); }
     else if (ds.tab){ view.tab=ds.tab; render(); }
     else if (ds.duoside){ duoActive = ds.duoside; render(); }
+    else if (ds.durtoggle!==undefined && ds.durtoggle!==""){ const it = activeDraft()[+ds.durtoggle];
+      if (it.dur){ delete it.dur; it.reps = ""; }
+      else { delete it.dist; it.dur = 20; it.sets = 2; it.reps = "20min"; it.weight = null; }
+      persistDraft(); render(); }
     else if (ds.sideto){ const [i,s] = ds.sideto.split(":"); const it = activeDraft()[+i];
       const base = it.name.replace(/ \((L|R)\)$/, "");
       it.side = it.side === s ? null : s;
@@ -2114,10 +2136,12 @@ function bind(){
     if (ds.sets) AD[+ds.sets].sets = Math.max(1,+t.value||1);
     else if (ds.reps) AD[+ds.reps].reps = t.value;
     else if (ds.wt) AD[+ds.wt].weight = t.value===""?null:+t.value;
+    else if (ds.dur){ const it = AD[+ds.dur]; const v = Math.max(1, +t.value||1); it.dur = v; it.sets = Math.max(1, Math.min(6, Math.round(v/10))); it.reps = `${v}min`; }
+    else if (ds.dist){ const it = AD[+ds.dist]; it.dist = t.value.trim(); it.reps = it.dist; }
     else if (ds.sdw){ const [i,j]=ds.sdw.split(":").map(Number); AD[i].setDetail[j].weight = t.value===""?null:+t.value; AD[i].weight = E.maxWeight(AD[i].setDetail); }
     else if (ds.sdr){ const [i,j]=ds.sdr.split(":").map(Number); AD[i].setDetail[j].reps = t.value; AD[i].reps = AD[i].setDetail.map(s=>s.reps||"").join("/"); }
     else if (ds.sdi){ const [i,j]=ds.sdi.split(":").map(Number); if (t.value) AD[i].setDetail[j].intensity = t.value; else delete AD[i].setDetail[j].intensity; render(); }
-    if (ds.sets!==undefined||ds.reps!==undefined||ds.wt!==undefined||ds.sdw!==undefined||ds.sdr!==undefined||ds.sdi!==undefined) persistDraft();
+    if (ds.sets!==undefined||ds.reps!==undefined||ds.wt!==undefined||ds.dur!==undefined||ds.dist!==undefined||ds.sdw!==undefined||ds.sdr!==undefined||ds.sdi!==undefined) persistDraft();
     else if (t.id==="injtype"){ injForm.type = t.value; injForm.lo = null; injForm.hi = null; const [lo,hi]=injRefDays(); $("#injlo").value=lo; $("#injhi").value=hi; }
     else if (t.id==="injlabel") injForm.label = t.value;
     else if (t.id==="injonset"){ injForm.onset = t.value; render(); }

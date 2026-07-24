@@ -275,15 +275,15 @@ function parseSetsReps(seg) {
   }
   if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:min|mins|minutes)\b/i))) {
     const mins = +m[1];
-    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${mins}min` };
+    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${mins}min`, dur: mins };
   }
   if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:miles?|mi)\b/i))) {
     const mins = +m[1] * 9;
-    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${m[1]}mi` };
+    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${m[1]}mi`, dist: `${m[1]}mi` };
   }
   if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:km|kilometers?)\b/i))) {
     const mins = +m[1] * 5.6;
-    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${m[1]}km` };
+    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${m[1]}km`, dist: `${m[1]}km` };
   }
   if ((m = seg.match(/(\d+)\s*sets?\s*(?:of\s*(\d+)(?:\s*[-–]\s*(\d+))?)?/i))) {
     let reps = m[3] ? `${m[2]}-${m[3]}` : (m[2] || "");
@@ -367,7 +367,8 @@ function parseSession(text, customLib) {
         item = { ...base, setDetail: tokens, sets: tokens.length,
           reps: tokens.map(t => t.reps).join("/"), weight: maxWeight(tokens) };
       } else if (sr) {
-        item = { ...base, sets: sr.sets, reps: sr.reps, weight: parseWeight(seg) };
+        item = { ...base, sets: sr.sets, reps: sr.reps, weight: parseWeight(seg),
+          ...(sr.dur ? { dur: sr.dur } : {}), ...(sr.dist ? { dist: sr.dist } : {}) };
       } else {
         item = { ...base, sets: 3, reps: "", weight: parseWeight(seg), assumedSets: true };
       }
