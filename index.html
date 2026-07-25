@@ -1393,13 +1393,18 @@ function clinicalSummary(c, i){
 
 function tolBlock(c, i){
   const t = loadTolerance(c, i);
-  if (!t) return "";
+  if (!t) return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+    <div style="font-size:12px;font-weight:800;color:#8b93a5">Load tolerance: no baseline yet</div>
+    <div class="muted" style="font-size:11px;line-height:1.5">${i.side
+      ? `No ${i.side}/${i.side==="L"?"R":"L"} pairs logged yet — log the same lift on both sides (e.g. "RDL left … right …") and symmetry tracking starts automatically, no history needed.`
+      : `This injury predates their training data in the app, so %-of-baseline can't be computed. The Healing Index runs on pain + tests instead. Options: tag the side (L/R) on a one-sided injury to use limb symmetry (needs no history), or add remembered pre-injury numbers as tests (e.g. "Bench vs pre-injury est." target 90%).`}</div>
+  </div>`;
   return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
     <div class="row"><div class="grow">
       <div style="font-size:12px;font-weight:800;color:${tolColor(t.pct)}">Load tolerance ${t.pct}% <span style="color:#8b93a5;font-weight:400">${t.mode==="lsi"?`vs ${t.other} side (symmetry)`:"of pre-injury baseline"}${tolArrow(t)}</span></div>
       ${t.rows.slice(0,4).map(r=>`<div style="font-size:11px;color:#CFD3DC">${esc(r.name)} — ${r.pct==null?'<span style="color:#8b93a5">not tested since onset</span>':`${r.pct}% (${r.curTxt} vs ${r.refTxt})${r.stale?' <span style="color:#8b93a5">· older data</span>':""}`}</div>`).join("")}
     </div>${tolSpark(t.trend)}</div>
-    <div class="muted" style="font-size:10px;margin-top:2px">Reference only — % of ${t.mode==="lsi"?"the uninjured side":"pre-injury capacity"}, not a clearance call.</div>
+    <div class="muted" style="font-size:10px;margin-top:2px">Reference only — % of ${t.mode==="lsi"?"the uninjured side":"pre-injury capacity"}, not a clearance call.${t.mode==="base"?" Only lifts with pre-injury history are compared.":""}</div>
   </div>`;
 }
 
