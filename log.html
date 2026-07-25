@@ -119,6 +119,7 @@ const EXERCISE_LIBRARY = [
   { name: "Plank", aliases: ["plank","planks"], p: ["core"], s: [], hold: true },
   { name: "Side Plank", aliases: ["side plank","side planks","side plank raise","side plank raises"], p: ["core"], s: ["abductors"], hold: true },
   { name: "Wall Sit", aliases: ["wall sit","wall sits","wall-sit"], p: ["quads"], s: ["glutes"], hold: true },
+  { name: "Band Pull-Apart", aliases: ["band pull apart","band pull aparts","band pull-aparts","pull aparts"], p: ["rear-delts"], s: ["mid-back"] },
   { name: "Dead Hang", aliases: ["dead hang","dead hangs","bar hang"], p: ["forearms-grip"], s: ["lats"], hold: true },
   { name: "Ab Crunch", aliases: ["ab crunch","crunch","crunches","cable ab crunch","cable crunch"], p: ["core"], s: [] },
   { name: "Leg Lift", aliases: ["leg lift","leg lifts","leg raise","leg raises","leg lift holds with crunches","leg lift hold"], p: ["core"], s: [] },
@@ -363,6 +364,10 @@ function parseSession(text, customLib) {
       const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: detectIntensity(seg), raw: seg };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
       if (ex.hold) base.hold = true;
+      if (/\bband(s|ed)?\b/i.test(seg) || /band/i.test(ex.name)){
+        const cm = seg.match(/\b(red|blue|green|black|purple|orange|yellow|gr[ae]y|white|pink|teal|tan|gold|silver)\b/i);
+        base.band = cm ? cm[1].toLowerCase() : "band";
+      }
       const sd_ = sideOf(seg);
       if (sd_){ base.side = sd_; base.name = ex.name + " (" + sd_ + ")"; }
       let item;
@@ -395,6 +400,12 @@ function parseSession(text, customLib) {
       const item = { raw: seg, sets: sr ? sr.sets : tokens.length, reps: sr ? sr.reps : tokens.map(t=>t.reps).join("/"),
         weight: tokens.length ? maxWeight(tokens) : parseWeight(seg),
         setDetail: tokens.length ? tokens : undefined, intensity: detectIntensity(seg) };
+      if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) item.bw = true;
+      if (/\bband(s|ed)?\b/i.test(seg)){
+        const cm = seg.match(/\b(red|blue|green|black|purple|orange|yellow|gr[ae]y|white|pink|teal|tan|gold|silver)\b/i);
+        item.band = cm ? cm[1].toLowerCase() : "band";
+        item.weight = null;
+      }
       unmatched.push(item); last = item;
     }
     /* else: filler text, skip */

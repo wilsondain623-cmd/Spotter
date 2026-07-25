@@ -183,6 +183,7 @@ const EXERCISE_LIBRARY = [
   { name: "Plank", aliases: ["plank","planks"], p: ["core"], s: [], hold: true },
   { name: "Side Plank", aliases: ["side plank","side planks","side plank raise","side plank raises"], p: ["core"], s: ["abductors"], hold: true },
   { name: "Wall Sit", aliases: ["wall sit","wall sits","wall-sit"], p: ["quads"], s: ["glutes"], hold: true },
+  { name: "Band Pull-Apart", aliases: ["band pull apart","band pull aparts","band pull-aparts","pull aparts"], p: ["rear-delts"], s: ["mid-back"] },
   { name: "Dead Hang", aliases: ["dead hang","dead hangs","bar hang"], p: ["forearms-grip"], s: ["lats"], hold: true },
   { name: "Ab Crunch", aliases: ["ab crunch","crunch","crunches","cable ab crunch","cable crunch"], p: ["core"], s: [] },
   { name: "Leg Lift", aliases: ["leg lift","leg lifts","leg raise","leg raises","leg lift holds with crunches","leg lift hold"], p: ["core"], s: [] },
@@ -427,6 +428,10 @@ function parseSession(text, customLib) {
       const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: detectIntensity(seg), raw: seg };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
       if (ex.hold) base.hold = true;
+      if (/\bband(s|ed)?\b/i.test(seg) || /band/i.test(ex.name)){
+        const cm = seg.match(/\b(red|blue|green|black|purple|orange|yellow|gr[ae]y|white|pink|teal|tan|gold|silver)\b/i);
+        base.band = cm ? cm[1].toLowerCase() : "band";
+      }
       const sd_ = sideOf(seg);
       if (sd_){ base.side = sd_; base.name = ex.name + " (" + sd_ + ")"; }
       let item;
@@ -459,6 +464,12 @@ function parseSession(text, customLib) {
       const item = { raw: seg, sets: sr ? sr.sets : tokens.length, reps: sr ? sr.reps : tokens.map(t=>t.reps).join("/"),
         weight: tokens.length ? maxWeight(tokens) : parseWeight(seg),
         setDetail: tokens.length ? tokens : undefined, intensity: detectIntensity(seg) };
+      if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) item.bw = true;
+      if (/\bband(s|ed)?\b/i.test(seg)){
+        const cm = seg.match(/\b(red|blue|green|black|purple|orange|yellow|gr[ae]y|white|pink|teal|tan|gold|silver)\b/i);
+        item.band = cm ? cm[1].toLowerCase() : "band";
+        item.weight = null;
+      }
       unmatched.push(item); last = item;
     }
     /* else: filler text, skip */
@@ -1146,7 +1157,8 @@ function draftItemHtml(it, i){
     + `<span class="ichip ${it.bw?"on":""}" data-bwtoggle="${i}" style="${it.bw?"":"opacity:.75"}">BW</span>`
     + `<span class="ichip ${it.side==="L"?"on":""}" data-sideto="${i}:L" style="${it.side==="L"?"":"opacity:.75"}">L</span>`
     + `<span class="ichip ${it.side==="R"?"on":""}" data-sideto="${i}:R" style="${it.side==="R"?"":"opacity:.75"}">R</span>`
-    + (it.setDetail?``:`<span class="ichip ${it.dur?"on":""}" data-durtoggle="${i}" style="${it.dur?"":"opacity:.75"}">⏱ time</span>`);
+    + (it.setDetail?``:`<span class="ichip ${it.dur?"on":""}" data-durtoggle="${i}" style="${it.dur?"":"opacity:.75"}">⏱ time</span>`)
+    + (it.setDetail?``:`<span class="ichip ${it.band!==undefined?"on":""}" data-bandtoggle="${i}" style="${it.band!==undefined?"":"opacity:.75"}">band</span>`);
   let body;
   if (it.unmatched){
     body = `<div class="minirow"><button class="btn-sm" data-assign="${i}">Assign muscles →</button></div>`;
@@ -1165,7 +1177,13 @@ function draftItemHtml(it, i){
       <div class="ichips">${chips}</div>
       <div class="muted" style="font-size:10px;margin-top:2px">Chips set the default intensity — the dropdown overrides it per set.</div>`;
   } else {
-    body = (it.dur || it.dist) ? `<div class="minirow">
+    body = (it.band !== undefined) ? `<div class="minirow">
+      <span class="lbl">sets</span><input type="number" inputmode="numeric" style="width:58px" value="${it.sets}" data-sets="${i}">
+      <span class="lbl">reps</span><input type="text" style="width:64px" value="${esc(it.reps||"")}" data-reps="${i}" placeholder="reps?">
+      <span class="lbl">band</span><input type="text" style="width:70px" value="${esc(it.band==="band"?"":it.band||"")}" data-band="${i}" placeholder="color">
+    </div>
+    <div class="muted" style="font-size:10px;margin:2px 0 4px">Band work counts for fatigue but stays off charts/PRs — colors are for your history notes.</div>
+    <div class="ichips">${chips}</div>` : (it.dur || it.dist) ? `<div class="minirow">
       ${it.dist?`<span class="lbl">distance</span><input type="text" style="width:80px" value="${esc(it.dist)}" data-dist="${i}">`:`<span class="lbl">time</span><input type="number" inputmode="numeric" style="width:74px" value="${it.dur??""}" data-dur="${i}"><span class="lbl">min</span>`}
       <span class="lbl" style="color:var(--dim);font-size:10px">feeds whole-body load, not per-muscle weights</span>
     </div>
@@ -1218,6 +1236,7 @@ function tabLog(c){
 }
 
 function fmtExercise(x){
+  if (x.band) return `${x.name} ${x.sets}×${x.reps||"?"} @ ${x.band==="band"?"band":x.band+" band"} (${x.intensity})`;
   if (x.dur) return `${x.name} ${x.dur} min (${x.intensity})`;
   if (x.dist) return `${x.name} ${x.dist} (${x.intensity})`;
   if (x.bw){
@@ -1248,6 +1267,7 @@ function liftSeries(c){
     for (const x of s.exercises){
       let top = null, vol = 0;
       const e1rm = (w, r) => (!r || r <= 1) ? w : Math.round(w * (1 + Math.min(r, 12) / 30));
+      if (x.band){ continue; }
       if (x.hold){
         const secs = holdSecs(x);
         if (secs){ top = { w:null, r:null, e1: secs, du:true, unit: "s" }; vol = secs * (x.sets||1); }
@@ -1654,6 +1674,7 @@ function rebuildClient(c){
   const map = {};
   for (const p of c.prs.filter(p=>p.date < "2026-06-22")) map[p.exercise] = { ...p };
   for (const s of structured) for (const x of s.exercises){
+    if (x.band) continue;
     const e0 = map[x.name];
     if (x.hold){
       const secs = holdSecs(x);
@@ -1684,7 +1705,7 @@ function rebuildClient(c){
 /* Save a parsed session for a specific client (used by log tab + client-submission review) */
 function applyParsedSession(c, items, date, title, solo){
   const before = {}; for (const p of c.prs) before[p.exercise] = { w: p.weight, r: p.reps, bw: !!p.bw, hold: !!p.hold, s2: p.secs };
-  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw,side,dur,dist,hold})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(side?{side}:{}),...(hold?{hold:true}:{}),...(dur?{dur}:{}),...(dist?{dist}:{}),...(setDetail?{setDetail}:{})})) });
+  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw,side,dur,dist,hold,band})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(side?{side}:{}),...(hold?{hold:true}:{}),...(dur?{dur}:{}),...(dist?{dist}:{}),...(band!==undefined?{band:band||"band"}:{}),...(setDetail?{setDetail}:{})})) });
   c.sessions.sort((a,b)=>b.date.localeCompare(a.date));
   rebuildClient(c);
   let prMsg = "";
@@ -1740,6 +1761,8 @@ function confirmAssign(){
   save(); syncExLib();
   const item = { name, primary:p, secondary:s, sets:it.setDetail?it.setDetail.length:(it.sets||3),
     reps:it.reps||"", weight:it.weight??null, intensity:it.intensity||"moderate",
+    ...(it.bw?{bw:true}:{}), ...(it.band!==undefined?{band:it.band}:{}), ...(it.hold?{hold:true}:{}),
+    ...(it.dur?{dur:it.dur}:{}), ...(it.dist?{dist:it.dist}:{}), ...(it.side?{side:it.side}:{}),
     ...(it.setDetail?{setDetail:it.setDetail}:{}), raw:it.raw };
   const AD = activeDraft();
   if (creating) AD.push(item); else AD[assignTarget] = item;
@@ -2032,7 +2055,7 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
@@ -2072,6 +2095,10 @@ function bind(){
     else if (ds.bm){ const [m,v]=ds.bm.split(":"); toast(`${m}: ${v} / 10`); }
     else if (ds.tab){ view.tab=ds.tab; render(); }
     else if (ds.duoside){ duoActive = ds.duoside; render(); }
+    else if (ds.bandtoggle!==undefined && ds.bandtoggle!==""){ const it = activeDraft()[+ds.bandtoggle];
+      if (it.band !== undefined) delete it.band;
+      else { it.band = ""; it.weight = null; delete it.dur; delete it.dist; }
+      persistDraft(); render(); }
     else if (ds.durtoggle!==undefined && ds.durtoggle!==""){ const it = activeDraft()[+ds.durtoggle];
       if (it.dur){ delete it.dur; it.reps = ""; }
       else { delete it.dist; it.dur = 20; it.sets = 2; it.reps = "20min"; it.weight = null; }
@@ -2160,10 +2187,11 @@ function bind(){
     else if (ds.wt) AD[+ds.wt].weight = t.value===""?null:+t.value;
     else if (ds.dur){ const it = AD[+ds.dur]; const v = Math.max(1, +t.value||1); it.dur = v; it.sets = Math.max(1, Math.min(6, Math.round(v/10))); it.reps = `${v}min`; }
     else if (ds.dist){ const it = AD[+ds.dist]; it.dist = t.value.trim(); it.reps = it.dist; }
+    else if (ds.band !== undefined){ const it = AD[+ds.band]; it.band = t.value.trim(); }
     else if (ds.sdw){ const [i,j]=ds.sdw.split(":").map(Number); AD[i].setDetail[j].weight = t.value===""?null:+t.value; AD[i].weight = E.maxWeight(AD[i].setDetail); }
     else if (ds.sdr){ const [i,j]=ds.sdr.split(":").map(Number); AD[i].setDetail[j].reps = t.value; AD[i].reps = AD[i].setDetail.map(s=>s.reps||"").join("/"); }
     else if (ds.sdi){ const [i,j]=ds.sdi.split(":").map(Number); if (t.value) AD[i].setDetail[j].intensity = t.value; else delete AD[i].setDetail[j].intensity; render(); }
-    if (ds.sets!==undefined||ds.reps!==undefined||ds.wt!==undefined||ds.dur!==undefined||ds.dist!==undefined||ds.sdw!==undefined||ds.sdr!==undefined||ds.sdi!==undefined) persistDraft();
+    if (ds.sets!==undefined||ds.reps!==undefined||ds.wt!==undefined||ds.dur!==undefined||ds.dist!==undefined||ds.band!==undefined||ds.sdw!==undefined||ds.sdr!==undefined||ds.sdi!==undefined) persistDraft();
     else if (t.id==="injtype"){ injForm.type = t.value; injForm.lo = null; injForm.hi = null; const [lo,hi]=injRefDays(); $("#injlo").value=lo; $("#injhi").value=hi; }
     else if (t.id==="injlabel") injForm.label = t.value;
     else if (t.id==="injonset"){ injForm.onset = t.value; render(); }
