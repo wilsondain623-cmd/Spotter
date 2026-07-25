@@ -116,8 +116,10 @@ const EXERCISE_LIBRARY = [
   { name: "Tricep Pushdown", aliases: ["tricep pushdown","tricep pushdowns","pushdown","rope tricep pushdown","rope tricep pushdowns","long rope tricep pushdown","single arm tricep pushdown","single arm tricep pushdowns"], p: ["triceps"], s: [] },
   { name: "Overhead Tricep Extension", aliases: ["oh extension","overhead extension","overhead tricep extension","skull crusher","skull crushers"], p: ["triceps"], s: [] },
   { name: "Triceps Press", aliases: ["triceps press","tricep press","dip machine","weighted dip"], p: ["triceps"], s: ["chest","front-delts"] },
-  { name: "Plank", aliases: ["plank","planks"], p: ["core"], s: [] },
-  { name: "Side Plank", aliases: ["side plank","side planks","side plank raise","side plank raises"], p: ["core"], s: ["abductors"] },
+  { name: "Plank", aliases: ["plank","planks"], p: ["core"], s: [], hold: true },
+  { name: "Side Plank", aliases: ["side plank","side planks","side plank raise","side plank raises"], p: ["core"], s: ["abductors"], hold: true },
+  { name: "Wall Sit", aliases: ["wall sit","wall sits","wall-sit"], p: ["quads"], s: ["glutes"], hold: true },
+  { name: "Dead Hang", aliases: ["dead hang","dead hangs","bar hang"], p: ["forearms-grip"], s: ["lats"], hold: true },
   { name: "Ab Crunch", aliases: ["ab crunch","crunch","crunches","cable ab crunch","cable crunch"], p: ["core"], s: [] },
   { name: "Leg Lift", aliases: ["leg lift","leg lifts","leg raise","leg raises","leg lift holds with crunches","leg lift hold"], p: ["core"], s: [] },
   { name: "TRX Pushup", aliases: ["trx pushup","trx pushups","trx push-up","trx push ups"], p: ["chest"], s: ["front-delts","triceps","core"] },
@@ -360,6 +362,7 @@ function parseSession(text, customLib) {
     if (ex) {
       const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: detectIntensity(seg), raw: seg };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
+      if (ex.hold) base.hold = true;
       const sd_ = sideOf(seg);
       if (sd_){ base.side = sd_; base.name = ex.name + " (" + sd_ + ")"; }
       let item;

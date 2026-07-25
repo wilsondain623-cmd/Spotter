@@ -180,8 +180,10 @@ const EXERCISE_LIBRARY = [
   { name: "Tricep Pushdown", aliases: ["tricep pushdown","tricep pushdowns","pushdown","rope tricep pushdown","rope tricep pushdowns","long rope tricep pushdown","single arm tricep pushdown","single arm tricep pushdowns"], p: ["triceps"], s: [] },
   { name: "Overhead Tricep Extension", aliases: ["oh extension","overhead extension","overhead tricep extension","skull crusher","skull crushers"], p: ["triceps"], s: [] },
   { name: "Triceps Press", aliases: ["triceps press","tricep press","dip machine","weighted dip"], p: ["triceps"], s: ["chest","front-delts"] },
-  { name: "Plank", aliases: ["plank","planks"], p: ["core"], s: [] },
-  { name: "Side Plank", aliases: ["side plank","side planks","side plank raise","side plank raises"], p: ["core"], s: ["abductors"] },
+  { name: "Plank", aliases: ["plank","planks"], p: ["core"], s: [], hold: true },
+  { name: "Side Plank", aliases: ["side plank","side planks","side plank raise","side plank raises"], p: ["core"], s: ["abductors"], hold: true },
+  { name: "Wall Sit", aliases: ["wall sit","wall sits","wall-sit"], p: ["quads"], s: ["glutes"], hold: true },
+  { name: "Dead Hang", aliases: ["dead hang","dead hangs","bar hang"], p: ["forearms-grip"], s: ["lats"], hold: true },
   { name: "Ab Crunch", aliases: ["ab crunch","crunch","crunches","cable ab crunch","cable crunch"], p: ["core"], s: [] },
   { name: "Leg Lift", aliases: ["leg lift","leg lifts","leg raise","leg raises","leg lift holds with crunches","leg lift hold"], p: ["core"], s: [] },
   { name: "TRX Pushup", aliases: ["trx pushup","trx pushups","trx push-up","trx push ups"], p: ["chest"], s: ["front-delts","triceps","core"] },
@@ -424,6 +426,7 @@ function parseSession(text, customLib) {
     if (ex) {
       const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: detectIntensity(seg), raw: seg };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
+      if (ex.hold) base.hold = true;
       const sd_ = sideOf(seg);
       if (sd_){ base.side = sd_; base.name = ex.name + " (" + sd_ + ")"; }
       let item;
@@ -1229,6 +1232,12 @@ function fmtExercise(x){
 
 /* ---------------- Lift progress charts ---------------- */
 function repN(r){ const m = String(r??"").match(/\d+/); return m ? +m[0] : 0; }
+function holdSecs(x){
+  if (x.dur) return Math.round(x.dur * 60);
+  const one = s => { const m = String(s??"").match(/(\d+(?:\.\d+)?)\s*(min|m\b)?/i); if (!m) return 0; return Math.round(+m[1] * (m[2] ? 60 : 1)); };
+  if (x.setDetail && x.setDetail.length) return Math.max(...x.setDetail.map(sd=>one(sd.reps)), 0);
+  return Math.max(...String(x.reps||"").split("/").map(one), 0);
+}
 
 /* per-exercise series: oldest->newest [{date, w, r, vol}] */
 function liftSeries(c){
@@ -1239,7 +1248,10 @@ function liftSeries(c){
     for (const x of s.exercises){
       let top = null, vol = 0;
       const e1rm = (w, r) => (!r || r <= 1) ? w : Math.round(w * (1 + Math.min(r, 12) / 30));
-      if (x.dur || x.dist){
+      if (x.hold){
+        const secs = holdSecs(x);
+        if (secs){ top = { w:null, r:null, e1: secs, du:true, unit: "s" }; vol = secs * (x.sets||1); }
+      } else if (x.dur || x.dist){
         const val = x.dur || parseFloat(x.dist) || 0;
         if (val){ top = { w:null, r:null, e1: val, du:true, unit: x.dur ? "min" : (String(x.dist).toLowerCase().includes("mi") ? "mi" : "km") }; vol = val; }
       } else if (x.bw){
@@ -1335,7 +1347,7 @@ function buildChartCards(c){
     const unit = duMode ? (last.unit||"min") : bwMode ? "reps" : "lbs e1RM";
     const trend = pts.length > 1 ? ` · ${delta >= 0 ? "+" : ""}${delta} ${unit} since ${fmtDate(first.date)}` : " · first data point";
     const head = duMode
-      ? `last session ${last.e1} ${last.unit||"min"}${trend}`
+      ? (last.unit==="s" ? `best hold ${last.e1}s${trend}` : `last session ${last.e1} ${last.unit||"min"}${trend}`)
       : bwMode
       ? `top set ${last.e1} reps (bodyweight)${trend}`
       : `est 1RM ${last.e1} lbs (best set ${last.r?`${last.w}×${last.r}`:last.w})${trend}`;
@@ -1363,7 +1375,7 @@ function tabCharts(c){
 
 function prRow(p){
   return `<div class="pr"><div>${esc(p.exercise)}<div class="pd">${esc(p.detail||"")} · ${fmtDate(p.date)}</div></div>
-     <div class="pv">${p.bw?`${p.reps} reps`:`${p.weight} lbs`}</div></div>`;
+     <div class="pv">${p.hold?`${p.secs}s hold`:p.bw?`${p.reps} reps`:`${p.weight} lbs`}</div></div>`;
 }
 
 function readinessBreakdown(r){
@@ -1643,6 +1655,15 @@ function rebuildClient(c){
   for (const p of c.prs.filter(p=>p.date < "2026-06-22")) map[p.exercise] = { ...p };
   for (const s of structured) for (const x of s.exercises){
     const e0 = map[x.name];
+    if (x.hold){
+      const secs = holdSecs(x);
+      if (!secs) continue;
+      const detail = `${x.sets||1}×${x.reps||"?"}`;
+      if (!e0 || (e0.hold && secs > (e0.secs||0)) || (!e0.hold && !e0.weight)) {
+        if (!e0 || e0.hold || !e0.weight) map[x.name] = { exercise:x.name, hold:true, secs, weight:null, detail, date:s.date };
+      }
+      continue;
+    }
     if (x.bw){
       const rBest = x.setDetail && x.setDetail.length ? Math.max(...x.setDetail.map(sd=>repN(sd.reps)), 0) : repN(x.reps);
       if (!rBest) continue;
@@ -1662,16 +1683,17 @@ function rebuildClient(c){
 
 /* Save a parsed session for a specific client (used by log tab + client-submission review) */
 function applyParsedSession(c, items, date, title, solo){
-  const before = {}; for (const p of c.prs) before[p.exercise] = { w: p.weight, r: p.reps, bw: !!p.bw };
-  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw,side,dur,dist})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(side?{side}:{}),...(dur?{dur}:{}),...(dist?{dist}:{}),...(setDetail?{setDetail}:{})})) });
+  const before = {}; for (const p of c.prs) before[p.exercise] = { w: p.weight, r: p.reps, bw: !!p.bw, hold: !!p.hold, s2: p.secs };
+  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw,side,dur,dist,hold})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(side?{side}:{}),...(hold?{hold:true}:{}),...(dur?{dur}:{}),...(dist?{dist}:{}),...(setDetail?{setDetail}:{})})) });
   c.sessions.sort((a,b)=>b.date.localeCompare(a.date));
   rebuildClient(c);
   let prMsg = "";
   for (const p of c.prs){
     const b = before[p.exercise];
     if (!b) continue;
-    if (p.bw && b.bw && (p.reps||0) > (b.r||0)) prMsg = ` New PR: ${p.exercise} ${p.reps} reps!`;
-    else if (!p.bw && !b.bw && b.w != null && p.weight > b.w) prMsg = ` New PR: ${p.exercise} ${p.weight} lbs!`;
+    if (p.hold && b.hold && (p.secs||0) > (b.s2||0)) prMsg = ` New PR: ${p.exercise} ${p.secs}s hold!`;
+    else if (p.bw && b.bw && (p.reps||0) > (b.r||0)) prMsg = ` New PR: ${p.exercise} ${p.reps} reps!`;
+    else if (!p.hold && !p.bw && !b.hold && !b.bw && b.w != null && p.weight > b.w) prMsg = ` New PR: ${p.exercise} ${p.weight} lbs!`;
   }
   return prMsg;
 }
