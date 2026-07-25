@@ -881,6 +881,14 @@ function bodyMap(cur, injured){
 }
 
 let _pendingFetched = false;
+let _assessFetched = false;
+function fetchAssess(){
+  if (!S.syncUrl || !S.syncKey) return;
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/assess?key=${encodeURIComponent(S.syncKey)}`)
+    .then(r=>r.json()).then(d=>{
+      if (Array.isArray(d)){ S.aiAssess = {}; for (const a of d) if (a && a.c && a.i) S.aiAssess[a.c+":"+a.i] = a; save(); render(); }
+    }).catch(()=>{});
+}
 function render(){
   persistDraft();
   const app = $("#app");
@@ -889,6 +897,7 @@ function render(){
   else app.innerHTML = clientView();
   bind();
   if (S.syncUrl && S.syncKey && !_pendingFetched){ _pendingFetched = true; fetchPending(); }
+  if (S.syncUrl && S.syncKey && !_assessFetched){ _assessFetched = true; fetchAssess(); }
 }
 
 function reviewView(){
@@ -1137,7 +1146,9 @@ function tabBrief(c){
   const injBlock = injs.length ? `<div class="card" style="border-color:${INJ_COLOR}66">${injs.map(i=>{
     const ci = lastCheckIn(i);
     const _h = healingIndex(c, i);
-    const tchip = _h ? ` · <span style="color:${tolColor(_h.score)}">healing ${_h.score}</span>` : "";
+    const _a = aiAssessFor(c, i);
+    const _s = _a ? _a.score : (_h ? _h.score : null);
+    const tchip = _s != null ? ` · <span style="color:${tolColor(_s)}">healing ${_s}${_a?"*":""}</span>` : "";
     if (i.chronic) return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">∞ ${esc(i.label)} — chronic${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${tchip}${chronicHot(i)?' · <span style="color:#e0a8a8">flared — keep loading gentle</span>':""}</div>`;
     return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${tchip}</div>`;
   }).join("")}</div>` : "";
@@ -1280,10 +1291,12 @@ function loadTolerance(c, inj){
       rows.push({ name: m2[1], pct: lastP.pct, curTxt: fmtTol(lastP.cur), refTxt: fmtTol(lastP.ref) });
       for (const pr of pairs){ trendMap[pr.date] = Math.max(trendMap[pr.date] || 0, pr.pct); }
     }
-    if (!rows.length) return null;
-    rows.sort((a, b) => b.pct - a.pct);
-    const trend = Object.keys(trendMap).sort().map(d => ({ date: d, pct: trendMap[d] }));
-    return { mode: "lsi", side: inj.side, other, pct: rows[0].pct, rows, trend };
+    if (rows.length){
+      rows.sort((a, b) => b.pct - a.pct);
+      const trend = Object.keys(trendMap).sort().map(d => ({ date: d, pct: trendMap[d] }));
+      return { mode: "lsi", side: inj.side, other, pct: rows[0].pct, rows, trend };
+    }
+    /* no L/R pairs logged yet — fall through to pre-injury baseline comparison */
   }
   const rows = []; const trendMap = {};
   for (const n of names){
@@ -1475,16 +1488,25 @@ function healingIndex(c, inj){
   const score = Math.round(parts.reduce((s,p)=>s+p.v*p.w,0)/W);
   return { score, parts, tol };
 }
+function aiAssessFor(c, i){
+  const a = (S.aiAssess || {})[c.id + ":" + i.id];
+  if (!a || a.score == null) return null;
+  if (E.daysBetween(a.date, todayISO()) > 3) return null; /* stale reads expire */
+  return a;
+}
 function healingBar(c, i){
   const h = healingIndex(c, i);
-  if (!h) return "";
-  const col = tolColor(h.score);
-  const word = h.score >= 90 ? "well healed / near capacity" : h.score >= 70 ? "progressing" : "early / guarded";
+  const a = aiAssessFor(c, i);
+  if (!h && !a) return "";
+  const score = a ? a.score : h.score;
+  const col = tolColor(score);
+  const word = score >= 90 ? "well healed / near capacity" : score >= 70 ? "progressing" : "early / guarded";
   return `<div style="margin-top:8px">
     <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">
-      <span style="font-weight:800;color:${col}">Healing Index ${h.score} <span style="color:#8b93a5;font-weight:400">· ${word}</span></span>
-      <span style="color:#8b93a5">${h.parts.map(p=>`${p.k} ${p.v}`).join(" · ")}</span></div>
-    <div class="bar-track"><div class="bar-fill" style="width:${h.score}%;background:linear-gradient(90deg,${col}88,${col})"></div></div>
+      <span style="font-weight:800;color:${col}">Healing Index ${score} <span style="color:#8b93a5;font-weight:400">· ${word}${a&&h&&a.score!==h.score?` · Claude-adjusted (formula ${h.score})`:a?" · Claude-adjusted":""}</span></span>
+      ${h?`<span style="color:#8b93a5">${h.parts.map(p=>`${p.k} ${p.v}`).join(" · ")}</span>`:""}</div>
+    <div class="bar-track"><div class="bar-fill" style="width:${score}%;background:linear-gradient(90deg,${col}88,${col})"></div></div>
+    ${a&&a.note?`<div class="muted" style="font-size:10px;margin-top:3px">Claude, ${fmtDate(a.date)}: ${esc(a.note)}</div>`:""}
   </div>`;
 }
 
