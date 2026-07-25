@@ -1136,8 +1136,8 @@ function tabBrief(c){
   const injs = activeInjuries(c);
   const injBlock = injs.length ? `<div class="card" style="border-color:${INJ_COLOR}66">${injs.map(i=>{
     const ci = lastCheckIn(i);
-    const _t = loadTolerance(c, i);
-    const tchip = _t ? ` · <span style="color:${tolColor(_t.pct)}">load ${_t.pct}%</span>` : "";
+    const _h = healingIndex(c, i);
+    const tchip = _h ? ` · <span style="color:${tolColor(_h.score)}">healing ${_h.score}</span>` : "";
     if (i.chronic) return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">∞ ${esc(i.label)} — chronic${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${tchip}${chronicHot(i)?' · <span style="color:#e0a8a8">flared — keep loading gentle</span>':""}</div>`;
     return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${tchip}</div>`;
   }).join("")}</div>` : "";
@@ -1317,6 +1317,80 @@ function tolSpark(trend){
     return (j?`<line x1="${6+108*(j-1)/(pts.length-1)}" y1="${23-19*Math.min(pts[j-1].pct,mx)/mx}" x2="${x}" y2="${y}" stroke="#4D7DB4" stroke-width="1.5"/>`:"")+`<circle cx="${x}" cy="${y}" r="2" fill="#A8C4E0"/>`;
   }).join("")}</svg>`;
 }
+function testsBlock(c, i){
+  const bat = cpgFor(i);
+  const tests = i.tests || [];
+  const rows = tests.map((t,ti)=>{
+    const last = t.entries && t.entries.length ? t.entries[t.entries.length-1] : null;
+    const pct = testPct(t);
+    return `<div class="minirow" style="align-items:center">
+      <div class="grow" style="min-width:0;font-size:12px">${esc(t.name)}
+        <span style="color:#8b93a5;font-size:11px">${last?`${last.value}${t.unit==="0/1"?"":t.unit} on ${fmtDate(last.date)}`:"no entries"} · target ${t.target}${t.unit==="0/1"?"":t.unit}</span>
+        ${pct!=null?`<span style="color:${tolColor(pct)};font-weight:700;font-size:11px"> · ${pct}%</span>`:""}</div>
+      <input type="number" inputmode="decimal" style="width:58px" id="tv-${i.id}-${ti}" placeholder="${t.unit==="0/1"?"0/1":t.unit}">
+      <button class="btn-sm" data-testlog="${i.id}:${ti}">Log</button>
+      <button class="btn-x" data-testdel="${i.id}:${ti}">✕</button></div>`;
+  }).join("");
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+    <div style="font-size:12px;font-weight:800;color:var(--ice)">Tests & measures</div>
+    ${rows || `<div class="muted" style="font-size:11px">None yet — add your own or load a reference battery.</div>`}
+    <div class="minirow">
+      <input type="text" style="flex:2" id="tn-${i.id}" placeholder="test name (e.g. SLR pain-free)">
+      <input type="text" style="width:52px" id="tu-${i.id}" placeholder="unit">
+      <input type="number" style="width:58px" id="tt-${i.id}" placeholder="target">
+      <button class="btn-sm" data-testadd="${i.id}">+ Add</button></div>
+    ${bat?`<button class="btn2" style="width:100%;margin-top:6px" data-cpg="${i.id}">Load ${esc(bat.label)} (CPG reference targets)</button>`:""}
+    <div class="muted" style="font-size:10px;margin-top:4px">Reference targets from return-to-activity literature — adjust to your clinical judgment. Unit "0/1" = no/yes.</div>
+  </div>`;
+}
+function notesBlock(c, i){
+  const notes = i.cnotes || [];
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+    <div style="font-size:12px;font-weight:800;color:var(--ice)">Clinical notes</div>
+    ${notes.slice(-4).map(n=>`<div style="font-size:11px;color:#CFD3DC;line-height:1.5">${fmtDate(n.date)} — ${esc(n.text)}</div>`).join("") || ""}
+    <div class="minirow"><input type="text" style="flex:1" id="cn-${i.id}" placeholder="e.g. tender at insertion, cleared hinge patterning today">
+      <button class="btn-sm" data-injnote="${i.id}">Add</button></div>
+  </div>
+  <button class="btn2" style="width:100%;margin-top:8px" data-injcopy="${i.id}">📋 Copy clinical summary (paste to Claude for CPG review)</button>`;
+}
+function clinicalSummary(c, i){
+  const h = healingIndex(c, i);
+  const tol = h ? h.tol : loadTolerance(c, i);
+  const L = [];
+  L.push(`CLINICAL SUMMARY — ${c.name} — ${i.label}`);
+  L.push(`Type: ${i.type}${i.grade&&i.grade!=="1"?" grade "+i.grade:""}${i.chronic?" (chronic)":""}${i.side?` · ${i.side==="L"?"left":"right"} side`:""}`);
+  L.push(`Onset ${i.onset} (day ${injDay(i)})${i.expLo?` · reference window ${i.expLo}–${i.expHi} days`:""}`);
+  if (h) L.push(`Healing Index ${h.score} (${h.parts.map(p=>`${p.k} ${p.v}`).join(", ")})`);
+  L.push("");
+  L.push("PAIN CHECK-INS (best/worst/current, 0-10):");
+  for (const ci of (i.checkIns||[]).slice(-10)) L.push(`  ${ci.date}: now ${ci.pain}${ci.best!=null||ci.worst!=null?` (best ${ci.best??"–"}, worst ${ci.worst??"–"})`:""}${ci.note?` — ${ci.note}`:""}`);
+  if (tol){
+    L.push("");
+    L.push(`LOAD TOLERANCE (${tol.mode==="lsi"?`limb symmetry vs ${tol.other} side`:"vs pre-injury baseline"}): headline ${tol.pct}%`);
+    for (const r of tol.rows) L.push(`  ${r.name}: ${r.pct==null?"not tested since onset":`${r.pct}% (${r.curTxt} vs ${r.refTxt})`}`);
+  }
+  if ((i.tests||[]).length){
+    L.push("");
+    L.push("TESTS & MEASURES:");
+    for (const t of i.tests) L.push(`  ${t.name} (target ${t.target}${t.unit==="0/1"?"":t.unit}): ${(t.entries||[]).map(e=>`${e.date} ${e.value}`).join(", ") || "no entries"}`);
+  }
+  if ((i.cnotes||[]).length){
+    L.push("");
+    L.push("CLINICAL NOTES:");
+    for (const n of i.cnotes) L.push(`  ${n.date}: ${n.text}`);
+  }
+  const M = new Set(i.muscles||[]);
+  const recent = c.sessions.filter(s=>s.exercises&&s.exercises.some(x=>exMuscles(x.name).p.some(m=>M.has(m)))).slice(0,5);
+  if (recent.length){
+    L.push("");
+    L.push("RECENT SESSIONS LOADING THIS AREA:");
+    for (const s of recent) L.push(`  ${s.date} ${s.title}: ${s.exercises.filter(x=>exMuscles(x.name).p.some(m=>M.has(m))).map(fmtExercise).join("; ")}`);
+  }
+  L.push("");
+  L.push("Please evaluate healing progression against current CPGs and normative data for this injury type; flag anything off-trajectory and suggest next loading progressions. Reference ranges only — final call is the clinician's.");
+  return L.join("\n");
+}
+
 function tolBlock(c, i){
   const t = loadTolerance(c, i);
   if (!t) return "";
@@ -1326,6 +1400,86 @@ function tolBlock(c, i){
       ${t.rows.slice(0,4).map(r=>`<div style="font-size:11px;color:#CFD3DC">${esc(r.name)} — ${r.pct==null?'<span style="color:#8b93a5">not tested since onset</span>':`${r.pct}% (${r.curTxt} vs ${r.refTxt})${r.stale?' <span style="color:#8b93a5">· older data</span>':""}`}</div>`).join("")}
     </div>${tolSpark(t.trend)}</div>
     <div class="muted" style="font-size:10px;margin-top:2px">Reference only — % of ${t.mode==="lsi"?"the uninjured side":"pre-injury capacity"}, not a clearance call.</div>
+  </div>`;
+}
+
+/* ---- CPG-informed test batteries (reference targets — trainer edits to own judgment) ---- */
+const CPG_BATTERIES = [
+  { id:"hamstring", label:"Hamstring strain battery", muscles:["hamstrings"], tests:[
+    { name:"Pain-free walking", unit:"0/1", target:1 },
+    { name:"Askling H-test pain-free", unit:"0/1", target:1 },
+    { name:"Knee-flexion strength LSI", unit:"%", target:90 },
+    { name:"Single-leg bridge reps LSI", unit:"%", target:90 } ] },
+  { id:"ankle", label:"Ankle sprain battery", muscles:["calves"], tests:[
+    { name:"Weight-bearing lunge symmetry", unit:"%", target:90 },
+    { name:"Single-leg hop LSI", unit:"%", target:90 },
+    { name:"Single-leg balance 30s", unit:"0/1", target:1 } ] },
+  { id:"lbp", label:"Low-back battery", muscles:["low-back"], tests:[
+    { name:"Pain-free forward flexion", unit:"0/1", target:1 },
+    { name:"Side plank hold", unit:"s", target:45 },
+    { name:"Sorensen-style extension hold", unit:"s", target:60 },
+    { name:"Pain-free sit-to-stand x10", unit:"0/1", target:1 } ] },
+  { id:"shoulder", label:"Shoulder battery", muscles:["front-delts","side-delts","rear-delts","chest"], tests:[
+    { name:"Flexion ROM", unit:"deg", target:160 },
+    { name:"External-rotation ROM", unit:"deg", target:75 },
+    { name:"ER strength LSI", unit:"%", target:90 },
+    { name:"Pain-free overhead reach", unit:"0/1", target:1 } ] },
+  { id:"knee", label:"Knee battery", muscles:["quads"], tests:[
+    { name:"Quad strength LSI", unit:"%", target:90 },
+    { name:"Single-leg hop LSI", unit:"%", target:90 },
+    { name:"Triple hop LSI", unit:"%", target:90 },
+    { name:"Pain-free full-depth squat", unit:"0/1", target:1 } ] },
+];
+function cpgFor(inj){
+  const M = new Set(inj.muscles||[]);
+  return CPG_BATTERIES.find(b => b.muscles.some(m => M.has(m))) || null;
+}
+function testPct(t){
+  if (!t.entries || !t.entries.length) return null;
+  const v = t.entries[t.entries.length-1].value;
+  if (t.unit === "0/1") return v >= 1 ? 100 : 0;
+  return Math.max(0, Math.min(100, Math.round(100 * v / (t.target || 1))));
+}
+/* Healing Index: load 45 / pain 35 / tests 20, redistributed across whatever has data */
+function healingIndex(c, inj){
+  const parts = [];
+  const tol = loadTolerance(c, inj);
+  if (tol){
+    const tested = tol.rows.filter(r => r.pct != null).map(r => Math.min(r.pct, 110));
+    if (tested.length){
+      const sorted = [...tested].sort((a,b)=>a-b);
+      const median = sorted[Math.floor(sorted.length/2)];
+      const coverage = tested.length / tol.rows.length;
+      parts.push({ k:"load", v: Math.max(0, Math.min(100, Math.round(median * (0.6 + 0.4*coverage)))), w:45 });
+    }
+  }
+  const ci = lastCheckIn(inj);
+  if (ci){
+    const cur = ci.pain, worst = ci.worst != null ? ci.worst : cur;
+    let p = 100 - cur*10 - (worst-cur)*3;
+    const avg = a => a.length ? a.reduce((s,v)=>s+v,0)/a.length : null;
+    const a30 = avg((inj.checkIns||[]).filter(x=>E.daysBetween(x.date,todayISO())<=30).map(x=>x.pain));
+    const a60 = avg((inj.checkIns||[]).filter(x=>{const d=E.daysBetween(x.date,todayISO());return d>30&&d<=60;}).map(x=>x.pain));
+    if (a30!=null && a60!=null){ if (a30 < a60 - 0.3) p += 5; else if (a30 > a60 + 0.3) p -= 10; }
+    parts.push({ k:"pain", v: Math.max(0, Math.min(100, Math.round(p))), w:35 });
+  }
+  const tp = (inj.tests||[]).map(testPct).filter(v=>v!=null);
+  if (tp.length) parts.push({ k:"tests", v: Math.round(tp.reduce((s,v)=>s+v,0)/tp.length), w:20 });
+  if (!parts.length) return null;
+  const W = parts.reduce((s,p)=>s+p.w,0);
+  const score = Math.round(parts.reduce((s,p)=>s+p.v*p.w,0)/W);
+  return { score, parts, tol };
+}
+function healingBar(c, i){
+  const h = healingIndex(c, i);
+  if (!h) return "";
+  const col = tolColor(h.score);
+  const word = h.score >= 90 ? "well healed / near capacity" : h.score >= 70 ? "progressing" : "early / guarded";
+  return `<div style="margin-top:8px">
+    <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">
+      <span style="font-weight:800;color:${col}">Healing Index ${h.score} <span style="color:#8b93a5;font-weight:400">· ${word}</span></span>
+      <span style="color:#8b93a5">${h.parts.map(p=>`${p.k} ${p.v}`).join(" · ")}</span></div>
+    <div class="bar-track"><div class="bar-fill" style="width:${h.score}%;background:linear-gradient(90deg,${col}88,${col})"></div></div>
   </div>`;
 }
 
@@ -1530,6 +1684,7 @@ function tabInjuries(c){
           <div class="d-name" style="color:#e3c8ec">∞ ${esc(i.label)} <span style="font-size:11px;color:#8b93a5;font-weight:400">chronic</span></div>
           <div class="d-meta">${(i.muscles||[]).join(", ")} · tracking since ${fmtDate(i.onset)}</div>
         </div><button class="btn-x" data-injdel="${i.id}">✕</button></div>
+        ${healingBar(c, i)}
         <div class="row" style="margin-top:8px;gap:8px">
           <div class="grow">${ci?`<span style="font-size:12px;color:#CFD3DC">Last check-in ${fmtDate(ci.date)} · ${ciStr(ci)}${ci.note?" · "+esc(ci.note):""}</span>`:`<span style="font-size:12px;color:#8b93a5">No check-ins yet</span>`}
           ${a30!=null?`<span style="font-size:11px;color:#8b93a5"> · 30d avg ${a30}${trend}</span>`:""}
@@ -1538,6 +1693,8 @@ function tabInjuries(c){
         </div>
         ${chronicHot(i)?`<div style="margin-top:6px;font-size:12px;color:#e0a8a8;font-weight:700">Recent pain is high — drafts loading this area will warn until it settles.</div>`:""}
         ${tolBlock(c, i)}
+        ${testsBlock(c, i)}
+        ${notesBlock(c, i)}
 <div class="minirow">
   <span class="lbl">best</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painb-${i.id}" placeholder="0">
   <span class="lbl">worst</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painw-${i.id}" placeholder="0">
@@ -1566,6 +1723,7 @@ function tabInjuries(c){
         <div class="d-name" style="color:#e3c8ec">⚠ ${esc(i.label)}</div>
         <div class="d-meta">${(i.muscles||[]).join(", ")} · onset ${fmtDate(i.onset)} · ${INJURY_REFS[i.type]?INJURY_REFS[i.type].label:i.type}${i.grade!=="1"||i.type==="strain"||i.type==="sprain"?" grade "+i.grade:""}</div>
       </div><button class="btn-x" data-injdel="${i.id}">✕</button></div>
+      ${healingBar(c, i)}
       <div style="margin-top:8px">
         <div style="display:flex;justify-content:space-between;font-size:11px;color:#8b93a5">
           <span>Day ${day}</span><span>typical ${i.expLo}–${i.expHi} days${inWindow?" · in the window":""}</span></div>
@@ -1577,6 +1735,8 @@ function tabInjuries(c){
         ${spark}
       </div>
       ${tolBlock(c, i)}
+      ${testsBlock(c, i)}
+      ${notesBlock(c, i)}
 <div class="minirow">
   <span class="lbl">best</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painb-${i.id}" placeholder="0">
   <span class="lbl">worst</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painw-${i.id}" placeholder="0">
@@ -2138,7 +2298,7 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
@@ -2150,6 +2310,33 @@ function bind(){
     else if (ds.injgrade){ injForm.grade = ds.injgrade; injForm.lo = null; injForm.hi = null; render(); }
     else if (ds.injchronic){ injForm.chronic = !injForm.chronic; render(); }
     else if (ds.injside){ injForm.side = injForm.side === ds.injside ? null : ds.injside; render(); }
+    else if (ds.testlog){ const [iid, ti] = ds.testlog.split(":"); const c=client(); const inj=c.injuries.find(x=>x.id===iid); if(!inj) return;
+      const t = (inj.tests||[])[+ti]; if (!t) return;
+      const v = $("#tv-"+iid+"-"+ti).value; if (v===""){ toast("Enter a value first"); return; }
+      t.entries = t.entries||[]; t.entries.push({ date: todayISO(), value: +v });
+      save(); render(); toast(`${t.name} logged`); }
+    else if (ds.testadd){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.testadd); if(!inj) return;
+      const name = $("#tn-"+ds.testadd).value.trim(); if (!name){ toast("Name the test"); return; }
+      const unit = $("#tu-"+ds.testadd).value.trim() || "%";
+      const target = +($("#tt-"+ds.testadd).value) || (unit==="0/1" ? 1 : 90);
+      inj.tests = inj.tests||[]; inj.tests.push({ name, unit, target, entries:[] });
+      save(); render(); toast("Test added"); }
+    else if (ds.testdel){ const [iid, ti] = ds.testdel.split(":"); const c=client(); const inj=c.injuries.find(x=>x.id===iid); if(!inj) return;
+      if (confirm("Remove this test and its history?")){ inj.tests.splice(+ti,1); save(); render(); } }
+    else if (ds.cpg){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.cpg); if(!inj) return;
+      const bat = cpgFor(inj); if (!bat) return;
+      inj.tests = inj.tests||[];
+      let added = 0;
+      for (const t of bat.tests) if (!inj.tests.some(x=>x.name===t.name)){ inj.tests.push({ ...t, entries:[] }); added++; }
+      save(); render(); toast(added?`${added} reference tests added — targets are editable guidance, not clearance`:"Battery already loaded"); }
+    else if (ds.injnote){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.injnote); if(!inj) return;
+      const tx = $("#cn-"+ds.injnote).value.trim(); if (!tx){ toast("Write the note first"); return; }
+      inj.cnotes = inj.cnotes||[]; inj.cnotes.push({ date: todayISO(), text: tx });
+      save(); render(); toast("Note saved"); }
+    else if (ds.injcopy){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.injcopy); if(!inj) return;
+      const txt = clinicalSummary(c, inj);
+      if (typeof navigator!=="undefined" && navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast("Clinical summary copied — paste it to Claude")).catch(()=>prompt("Copy this summary:", txt));
+      else prompt("Copy this summary:", txt); }
     else if (ds.injci){ const c=client(); const i=c.injuries.find(x=>x.id===ds.injci); if(!i) return;
       const pv = $("#pain-"+ds.injci).value, bv = $("#painb-"+ds.injci).value, wv = $("#painw-"+ds.injci).value, nv = $("#cinote-"+ds.injci).value.trim();
       if (pv==="" && wv==="" && bv===""){ toast("Enter at least one pain score 0–10"); return; }
