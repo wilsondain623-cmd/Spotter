@@ -1136,8 +1136,10 @@ function tabBrief(c){
   const injs = activeInjuries(c);
   const injBlock = injs.length ? `<div class="card" style="border-color:${INJ_COLOR}66">${injs.map(i=>{
     const ci = lastCheckIn(i);
-    if (i.chronic) return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">∞ ${esc(i.label)} — chronic${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${chronicHot(i)?' · <span style="color:#e0a8a8">flared — keep loading gentle</span>':""}</div>`;
-    return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}</div>`;
+    const _t = loadTolerance(c, i);
+    const tchip = _t ? ` · <span style="color:${tolColor(_t.pct)}">load ${_t.pct}%</span>` : "";
+    if (i.chronic) return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">∞ ${esc(i.label)} — chronic${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${tchip}${chronicHot(i)?' · <span style="color:#e0a8a8">flared — keep loading gentle</span>':""}</div>`;
+    return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${tchip}</div>`;
   }).join("")}</div>` : "";
   return `${injBlock}${flagsBlock(c)}<div class="card brief-box">
     <div><span class="bb">Last session:</span> ${lastS?esc(lastS.title)+" — "+fmtDate(lastS.date)+" ("+E.daysBetween(lastS.date,todayISO())+" days ago)":"none logged"}</div>
@@ -1251,6 +1253,82 @@ function fmtExercise(x){
 
 /* ---------------- Lift progress charts ---------------- */
 function repN(r){ const m = String(r??"").match(/\d+/); return m ? +m[0] : 0; }
+/* ---- injury load tolerance: % of pre-injury baseline, or limb symmetry vs other side ---- */
+function tolColor(p){ return p >= 90 ? "#5fb48a" : p >= 70 ? "#d4a04d" : "#c95f5f"; }
+function fmtTol(p){ return (p.du && p.unit === "s") ? `${p.e1}s` : p.bw ? `${p.e1} reps` : `${p.e1} e1RM`; }
+function dGap(a, b){ return Math.abs((new Date(a+"T00:00:00") - new Date(b+"T00:00:00")) / 86400000); }
+function loadTolerance(c, inj){
+  const series = liftSeries(c);
+  const M = new Set(inj.muscles || []);
+  const names = Object.keys(series).filter(n => exMuscles(n).p.some(x => M.has(x)))
+    .filter(n => series[n].length && !series[n].some(p => p.du && p.unit !== "s"));
+  const today = todayISO();
+  if (inj.side){
+    const other = inj.side === "L" ? "R" : "L";
+    const rows = []; const trendMap = {};
+    for (const n of names){
+      const m2 = n.match(/^(.*) \((L|R)\)$/); if (!m2 || m2[2] !== inj.side) continue;
+      const healthy = series[`${m2[1]} (${other})`]; if (!healthy || !healthy.length) continue;
+      const pairs = [];
+      for (const p of series[n]){
+        let bestH = null, bestGap = 11;
+        for (const h of healthy){ const g = dGap(p.date, h.date); if (g < bestGap){ bestGap = g; bestH = h; } }
+        if (bestH && bestH.e1) pairs.push({ date: p.date, pct: Math.round(100 * p.e1 / bestH.e1), cur: p, ref: bestH });
+      }
+      if (!pairs.length) continue;
+      const lastP = pairs[pairs.length - 1];
+      rows.push({ name: m2[1], pct: lastP.pct, curTxt: fmtTol(lastP.cur), refTxt: fmtTol(lastP.ref) });
+      for (const pr of pairs){ trendMap[pr.date] = Math.max(trendMap[pr.date] || 0, pr.pct); }
+    }
+    if (!rows.length) return null;
+    rows.sort((a, b) => b.pct - a.pct);
+    const trend = Object.keys(trendMap).sort().map(d => ({ date: d, pct: trendMap[d] }));
+    return { mode: "lsi", side: inj.side, other, pct: rows[0].pct, rows, trend };
+  }
+  const rows = []; const trendMap = {};
+  for (const n of names){
+    const pts = series[n];
+    const pre = pts.filter(p => p.date < inj.onset);
+    if (!pre.length) continue;
+    const win = pre.filter(p => dGap(p.date, inj.onset) <= 90);
+    const baseline = Math.max(...(win.length ? win : pre).map(p => p.e1));
+    if (!baseline) continue;
+    const post = pts.filter(p => p.date >= inj.onset);
+    if (!post.length){ rows.push({ name: n, pct: null }); continue; }
+    const recent = post.filter(p => dGap(p.date, today) <= 14);
+    const curPt = recent.length ? recent.reduce((a, b) => a.e1 > b.e1 ? a : b) : post[post.length - 1];
+    rows.push({ name: n, pct: Math.round(100 * curPt.e1 / baseline), curTxt: fmtTol(curPt), refTxt: fmtTol({ ...curPt, e1: baseline }), stale: !recent.length });
+    for (const p of post){ trendMap[p.date] = Math.max(trendMap[p.date] || 0, Math.round(100 * p.e1 / baseline)); }
+  }
+  const tested = rows.filter(r => r.pct != null);
+  if (!tested.length) return null;
+  tested.sort((a, b) => b.pct - a.pct);
+  const trend = Object.keys(trendMap).sort().map(d => ({ date: d, pct: trendMap[d] }));
+  return { mode: "base", pct: tested[0].pct, rows: tested.concat(rows.filter(r => r.pct == null)), trend };
+}
+function tolArrow(t){ if (!t.trend || t.trend.length < 2) return ""; const d = t.trend[t.trend.length-1].pct - t.trend[0].pct;
+  return d > 2 ? ' · <span style="color:#5fb48a">improving ↑</span>' : d < -2 ? ' · <span style="color:#e0a8a8">regressing ↓</span>' : " · steady"; }
+function tolSpark(trend){
+  if (!trend || trend.length < 2) return "";
+  const pts = trend.slice(-12);
+  const mx = Math.max(120, ...pts.map(p=>p.pct));
+  return `<svg viewBox="0 0 120 26" style="width:120px;height:26px">${pts.map((p,j)=>{
+    const x = 6 + 108*j/(pts.length-1), y = 23 - 19*Math.min(p.pct, mx)/mx;
+    return (j?`<line x1="${6+108*(j-1)/(pts.length-1)}" y1="${23-19*Math.min(pts[j-1].pct,mx)/mx}" x2="${x}" y2="${y}" stroke="#4D7DB4" stroke-width="1.5"/>`:"")+`<circle cx="${x}" cy="${y}" r="2" fill="#A8C4E0"/>`;
+  }).join("")}</svg>`;
+}
+function tolBlock(c, i){
+  const t = loadTolerance(c, i);
+  if (!t) return "";
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+    <div class="row"><div class="grow">
+      <div style="font-size:12px;font-weight:800;color:${tolColor(t.pct)}">Load tolerance ${t.pct}% <span style="color:#8b93a5;font-weight:400">${t.mode==="lsi"?`vs ${t.other} side (symmetry)`:"of pre-injury baseline"}${tolArrow(t)}</span></div>
+      ${t.rows.slice(0,4).map(r=>`<div style="font-size:11px;color:#CFD3DC">${esc(r.name)} — ${r.pct==null?'<span style="color:#8b93a5">not tested since onset</span>':`${r.pct}% (${r.curTxt} vs ${r.refTxt})${r.stale?' <span style="color:#8b93a5">· older data</span>':""}`}</div>`).join("")}
+    </div>${tolSpark(t.trend)}</div>
+    <div class="muted" style="font-size:10px;margin-top:2px">Reference only — % of ${t.mode==="lsi"?"the uninjured side":"pre-injury capacity"}, not a clearance call.</div>
+  </div>`;
+}
+
 function holdSecs(x){
   if (x.dur) return Math.round(x.dur * 60);
   const one = s => { const m = String(s??"").match(/(\d+(?:\.\d+)?)\s*(min|m\b)?/i); if (!m) return 0; return Math.round(+m[1] * (m[2] ? 60 : 1)); };
@@ -1426,7 +1504,7 @@ function recTrendChart(c){
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block;margin-top:8px">${out}</svg>`;
 }
 
-let injForm = { type:"strain", grade:"1", chronic:false, label:"", onset:null, lo:null, hi:null };
+let injForm = { type:"strain", grade:"1", chronic:false, label:"", onset:null, lo:null, hi:null, side:null };
 let injSel = {};
 
 function injRefDays(){ const r = INJURY_REFS[injForm.type]||INJURY_REFS.other; return r.g[injForm.grade]||r.g["1"]; }
@@ -1459,6 +1537,7 @@ function tabInjuries(c){
           ${spark}
         </div>
         ${chronicHot(i)?`<div style="margin-top:6px;font-size:12px;color:#e0a8a8;font-weight:700">Recent pain is high — drafts loading this area will warn until it settles.</div>`:""}
+        ${tolBlock(c, i)}
 <div class="minirow">
   <span class="lbl">best</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painb-${i.id}" placeholder="0">
   <span class="lbl">worst</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painw-${i.id}" placeholder="0">
@@ -1497,6 +1576,7 @@ function tabInjuries(c){
         ${stale?`<span style="color:#e0a86a;font-size:11px;font-weight:700"> · check-in due</span>`:""}</div>
         ${spark}
       </div>
+      ${tolBlock(c, i)}
 <div class="minirow">
   <span class="lbl">best</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painb-${i.id}" placeholder="0">
   <span class="lbl">worst</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painw-${i.id}" placeholder="0">
@@ -1524,7 +1604,10 @@ function tabInjuries(c){
   <div class="card"><h2 style="margin-top:0">Log an injury</h2>
     <input type="text" id="injlabel" placeholder="e.g. Right oblique strain" value="${esc(injForm.label||"")}">
     <div class="minirow"><span class="lbl">Type</span><select id="injtype">${typeOpts}</select></div>
-    <div class="ichips" style="margin-top:8px">${gradeChips}<span class="ichip ${injForm.chronic?"on":""}" data-injchronic="1">∞ chronic / recurring</span></div>
+    <div class="ichips" style="margin-top:8px">${gradeChips}<span class="ichip ${injForm.chronic?"on":""}" data-injchronic="1">∞ chronic / recurring</span>
+      <span class="ichip ${injForm.side==="L"?"on":""}" data-injside="L">left side</span>
+      <span class="ichip ${injForm.side==="R"?"on":""}" data-injside="R">right side</span></div>
+    ${injForm.side?`<div class="muted" style="font-size:11px;margin:4px 0">One-sided injury — load tolerance will compare ${injForm.side==="L"?"left":"right"}-side lifts against the other side (limb symmetry).</div>`:""}
     <div class="muted" style="margin:8px 0 4px;font-size:11px">Affected muscle groups (tap):</div>
     <div class="mgrid">${grid}</div>
     <div class="minirow"><span class="lbl">Onset</span><input type="date" id="injonset" value="${injForm.onset||todayISO()}"></div>
@@ -2055,7 +2138,7 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injci],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
@@ -2066,6 +2149,7 @@ function bind(){
     else if (ds.injmus){ injSel[ds.injmus] = !injSel[ds.injmus]; if(!injSel[ds.injmus]) delete injSel[ds.injmus]; render(); }
     else if (ds.injgrade){ injForm.grade = ds.injgrade; injForm.lo = null; injForm.hi = null; render(); }
     else if (ds.injchronic){ injForm.chronic = !injForm.chronic; render(); }
+    else if (ds.injside){ injForm.side = injForm.side === ds.injside ? null : ds.injside; render(); }
     else if (ds.injci){ const c=client(); const i=c.injuries.find(x=>x.id===ds.injci); if(!i) return;
       const pv = $("#pain-"+ds.injci).value, bv = $("#painb-"+ds.injci).value, wv = $("#painw-"+ds.injci).value, nv = $("#cinote-"+ds.injci).value.trim();
       if (pv==="" && wv==="" && bv===""){ toast("Enter at least one pain score 0–10"); return; }
@@ -2159,15 +2243,15 @@ function bind(){
         c.injuries = c.injuries||[];
         if (injForm.chronic){
           c.injuries.push({ id:"inj"+Date.now(), label, type:injForm.type, grade:injForm.grade, chronic:true,
-            muscles, onset, status:"active", checkIns:[] });
+            ...(injForm.side?{side:injForm.side}:{}), muscles, onset, status:"active", checkIns:[] });
         } else {
           const [aLo2, aHi2] = injRefDays();
           const lo = +($("#injlo").value) || injForm.lo || aLo2, hi = +($("#injhi").value) || injForm.hi || aHi2;
           c.injuries.push({ id:"inj"+Date.now(), label, type:injForm.type, grade:injForm.grade,
-            muscles, onset, expLo:Math.min(lo,hi), expHi:Math.max(lo,hi),
+            ...(injForm.side?{side:injForm.side}:{}), muscles, onset, expLo:Math.min(lo,hi), expHi:Math.max(lo,hi),
             status:"active", checkIns:[] });
         }
-        injSel={}; injForm = { type:"strain", grade:"1", chronic:false, label:"", onset:null, lo:null, hi:null };
+        injSel={}; injForm = { type:"strain", grade:"1", chronic:false, label:"", onset:null, lo:null, hi:null, side:null };
         save(); render(); toast(wasChronic?`${label} logged — chronic tracking is on`:`${label} logged — it now shows on the body map and brief`); }
       else if (a==="whoop-link"){ const l = whoopConnectLink(client());
         if (l && typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Connect link copied — text it to the client")).catch(()=>prompt("Send this link to the client:", l));
