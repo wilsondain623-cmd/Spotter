@@ -1158,7 +1158,8 @@ function tabBrief(c){
     const _h = healingIndex(c, i);
     const _a = aiAssessFor(c, i);
     const _s = _a ? _a.score : (_h ? _h.score : null);
-    const tchip = _s != null ? ` · <span style="color:${tolColor(_s)}">healing ${_s}${_a?"*":""}</span>` : "";
+    const _pc = progressCall(c, i);
+    const tchip = (_s != null ? ` · <span style="color:${tolColor(_s)}">healing ${_s}${_a?"*":""}</span>` : "") + ` · <span style="color:${callColor(_pc.w)};font-weight:800">${_pc.w}</span>`;
     if (i.chronic) return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">∞ ${esc(i.label)} — chronic${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${tchip}${chronicHot(i)?' · <span style="color:#e0a8a8">flared — keep loading gentle</span>':""}</div>`;
     return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${tchip}</div>`;
   }).join("")}</div>` : "";
@@ -1284,12 +1285,19 @@ function loadTolerance(c, inj){
   const names = Object.keys(series).filter(n => exMuscles(n).p.some(x => M.has(x)))
     .filter(n => series[n].length && !series[n].some(p => p.du && p.unit !== "s"));
   const today = todayISO();
+  const flags = [];
+
+  let lsiRes = null;
   if (inj.side){
     const other = inj.side === "L" ? "R" : "L";
     const rows = []; const trendMap = {};
     for (const n of names){
       const m2 = n.match(/^(.*) \((L|R)\)$/); if (!m2 || m2[2] !== inj.side) continue;
       const healthy = series[`${m2[1]} (${other})`]; if (!healthy || !healthy.length) continue;
+      /* reference-side decline check: symmetry flatters recovery if the healthy side is detraining */
+      const hMax = Math.max(...healthy.map(p=>p.e1));
+      if (healthy[healthy.length-1].e1 < hMax * 0.9 && healthy.length > 2)
+        flags.push(`${m2[1]}: uninjured side declining — symmetry may flatter recovery`);
       const pairs = [];
       for (const p of series[n]){
         let bestH = null, bestGap = 11;
@@ -1305,32 +1313,53 @@ function loadTolerance(c, inj){
     if (rows.length){
       rows.sort((a, b) => b.pct - a.pct);
       const trend = Object.keys(trendMap).sort().map(d => ({ date: d, pct: trendMap[d] }));
-      return { mode: "lsi", side: inj.side, other, pct: rows[0].pct, rows, trend };
+      lsiRes = { mode: "lsi", side: inj.side, other, pct: rows[0].pct, rows, trend, flags };
     }
-    /* no L/R pairs logged yet — fall through to pre-injury baseline comparison */
   }
-  const rows = []; const trendMap = {};
-  for (const n of names){
-    const pts = series[n];
-    const pre = pts.filter(p => p.date < inj.onset);
-    if (!pre.length) continue;
-    const win = pre.filter(p => dGap(p.date, inj.onset) <= 90);
-    const baseline = Math.max(...(win.length ? win : pre).map(p => p.e1));
-    if (!baseline) continue;
-    const post = pts.filter(p => p.date >= inj.onset);
-    if (!post.length){ rows.push({ name: n, pct: null }); continue; }
-    const recent = post.filter(p => dGap(p.date, today) <= 14);
-    const curPt = recent.length ? recent.reduce((a, b) => a.e1 > b.e1 ? a : b) : post[post.length - 1];
-    const fl = flaredAfter(inj, curPt.date);
-    const rawPct = Math.round(100 * curPt.e1 / baseline);
-    rows.push({ name: n, pct: fl ? Math.round(rawPct * 0.75) : rawPct, curTxt: fmtTol(curPt), refTxt: fmtTol({ ...curPt, e1: baseline }), stale: !recent.length, flared: fl });
-    for (const p of post){ const v0 = Math.round(100 * p.e1 / baseline); trendMap[p.date] = Math.max(trendMap[p.date] || 0, flaredAfter(inj, p.date) ? Math.round(v0 * 0.75) : v0); }
+
+  let baseRes = null;
+  {
+    const rows = []; const trendMap = {};
+    for (const n of names){
+      const pts = series[n];
+      const pre = pts.filter(p => p.date < inj.onset);
+      if (!pre.length) continue;
+      const win = pre.filter(p => dGap(p.date, inj.onset) <= 90);
+      const baseline = Math.max(...(win.length ? win : pre).map(p => p.e1));
+      if (!baseline) continue;
+      const post = pts.filter(p => p.date >= inj.onset);
+      if (!post.length){ rows.push({ name: n, pct: null }); continue; }
+      const recent = post.filter(p => dGap(p.date, today) <= 14);
+      let pool = recent.length ? recent : [post[post.length - 1]];
+      /* effort-aware: prefer non-warmup efforts as tolerance evidence when available */
+      const hard = pool.filter(p => p.int !== "warmup");
+      const submaxOnly = !hard.length;
+      if (hard.length) pool = hard;
+      const curPt = pool.reduce((a, b) => a.e1 > b.e1 ? a : b);
+      const fl = flaredAfter(inj, curPt.date);
+      const rawPct = Math.round(100 * curPt.e1 / baseline);
+      rows.push({ name: n, pct: fl ? Math.round(rawPct * 0.75) : rawPct, curTxt: fmtTol(curPt), refTxt: fmtTol({ ...curPt, e1: baseline }), stale: !recent.length, flared: fl, submax: submaxOnly });
+      for (const p of post){ const v0 = Math.round(100 * p.e1 / baseline); trendMap[p.date] = Math.max(trendMap[p.date] || 0, flaredAfter(inj, p.date) ? Math.round(v0 * 0.75) : v0); }
+    }
+    const tested = rows.filter(r => r.pct != null);
+    if (tested.length){
+      tested.sort((a, b) => b.pct - a.pct);
+      const trend = Object.keys(trendMap).sort().map(d => ({ date: d, pct: trendMap[d] }));
+      baseRes = { mode: "base", pct: tested[0].pct, rows: tested.concat(rows.filter(r => r.pct == null)), trend, flags };
+    }
   }
-  const tested = rows.filter(r => r.pct != null);
-  if (!tested.length) return null;
-  tested.sort((a, b) => b.pct - a.pct);
-  const trend = Object.keys(trendMap).sort().map(d => ({ date: d, pct: trendMap[d] }));
-  return { mode: "base", pct: tested[0].pct, rows: tested.concat(rows.filter(r => r.pct == null)), trend };
+
+  if (lsiRes && baseRes){
+    /* conservative merge: headline is the LOWER of symmetry and baseline reads */
+    const pct = Math.min(lsiRes.pct, baseRes.pct);
+    const tm = {};
+    for (const t of lsiRes.trend) tm[t.date] = t.pct;
+    for (const t of baseRes.trend) tm[t.date] = tm[t.date] != null ? Math.min(tm[t.date], t.pct) : t.pct;
+    const trend = Object.keys(tm).sort().map(d => ({ date: d, pct: tm[d] }));
+    return { mode: "both", side: inj.side, other: lsiRes.other, pct,
+      rows: lsiRes.rows.map(r=>({ ...r, name: r.name + " (LSI)" })).concat(baseRes.rows), trend, flags };
+  }
+  return lsiRes || baseRes || null;
 }
 function tolArrow(t){ if (!t.trend || t.trend.length < 2) return ""; const d = t.trend[t.trend.length-1].pct - t.trend[0].pct;
   return d > 2 ? ' · <span style="color:#5fb48a">improving ↑</span>' : d < -2 ? ' · <span style="color:#e0a8a8">regressing ↓</span>' : " · steady"; }
@@ -1425,13 +1454,15 @@ function tolBlock(c, i){
     <div class="muted" style="font-size:11px;line-height:1.5">${i.side
       ? `No ${i.side}/${i.side==="L"?"R":"L"} pairs logged yet — log the same lift on both sides (e.g. "RDL left … right …") and symmetry tracking starts automatically, no history needed.`
       : `This injury predates their training data in the app, so %-of-baseline can't be computed. The Healing Index runs on pain + tests instead. Options: tag the side (L/R) on a one-sided injury to use limb symmetry (needs no history), or add remembered pre-injury numbers as tests (e.g. "Bench vs pre-injury est." target 90%).`}</div>
+    ${(function(){ const ex = bandExposures(c, i); return ex.length ? `<div style="font-size:11px;color:#CFD3DC;margin-top:4px">Tolerated patterns so far: ${ex.map(e=>`${esc(e.name)} ${e.flared?"⚠":"✓"}`).join(" · ")}</div>` : ""; })()}
   </div>`;
   return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
     <div class="row"><div class="grow">
-      <div style="font-size:12px;font-weight:800;color:${tolColor(t.pct)}">Load tolerance ${t.pct}% <span style="color:#8b93a5;font-weight:400">${t.mode==="lsi"?`vs ${t.other} side (symmetry)`:"of pre-injury baseline"}${tolArrow(t)}</span></div>
-      ${t.rows.slice(0,4).map(r=>`<div style="font-size:11px;color:#CFD3DC">${esc(r.name)} — ${r.pct==null?'<span style="color:#8b93a5">not tested since onset</span>':`${r.pct}% (${r.curTxt} vs ${r.refTxt})${r.flared?' <span style="color:#e0a8a8">· flared after — discounted</span>':""}${r.stale?' <span style="color:#8b93a5">· older data</span>':""}`}</div>`).join("")}
+      <div style="font-size:12px;font-weight:800;color:${tolColor(t.pct)}">Load tolerance ${t.pct}% <span style="color:#8b93a5;font-weight:400">${t.mode==="lsi"?`vs ${t.other} side (symmetry)`:t.mode==="both"?`conservative of symmetry & baseline`:"of pre-injury baseline"}${tolArrow(t)}</span></div>
+      ${t.rows.slice(0,4).map(r=>`<div style="font-size:11px;color:#CFD3DC">${esc(r.name)} — ${r.pct==null?'<span style="color:#8b93a5">not tested since onset</span>':`${r.pct}% (${r.curTxt} vs ${r.refTxt})${r.flared?' <span style="color:#e0a8a8">· flared after — discounted</span>':""}${r.submax?' <span style="color:#8b93a5">· submax efforts only — likely underestimates</span>':""}${r.stale?' <span style="color:#8b93a5">· older data</span>':""}`}</div>`).join("")}
     </div>${tolSpark(t.trend)}</div>
-    <div class="muted" style="font-size:10px;margin-top:2px">Reference only — % of ${t.mode==="lsi"?"the uninjured side":"pre-injury capacity"}, not a clearance call.${t.mode==="base"?" Only lifts with pre-injury history are compared.":""}</div>
+    ${(function(){ const ex = bandExposures(c, i); return ex.length ? `<div style="font-size:11px;color:#CFD3DC;margin-top:4px">Tolerated patterns: ${ex.map(e=>`${esc(e.name)} ${e.flared?"⚠":"✓"}`).join(" · ")}</div>` : ""; })()}
+    <div class="muted" style="font-size:10px;margin-top:2px">Reference only — % of ${t.mode==="lsi"?"the uninjured side":t.mode==="both"?"whichever comparison is lower":"pre-injury capacity"}, not a clearance call.${t.mode!=="lsi"?" Only lifts with pre-injury history are compared.":""}</div>
   </div>`;
 }
 
@@ -1502,6 +1533,41 @@ function phaseCap(inj){
 }
 
 /* 24-48h symptom-response rule: a session only fully counts if no flare followed it */
+function bandExposures(c, inj){
+  const M = new Set(inj.muscles||[]);
+  const seen = {};
+  for (const s of c.sessions){
+    if (dGap(s.date, todayISO()) > 14) break; /* sessions sorted desc */
+    for (const x of (s.exercises||[])){
+      if (!x.band) continue;
+      if (!exMuscles(x.name).p.some(m=>M.has(m))) continue;
+      if (seen[x.name]) continue;
+      seen[x.name] = { name: x.name, date: s.date, flared: flaredAfter(inj, s.date) };
+    }
+  }
+  return Object.values(seen);
+}
+/* advisory only — the on-the-floor call, derived from the symptom-response rule */
+function progressCall(c, inj){
+  const cis = inj.checkIns || [];
+  const last = cis[cis.length - 1];
+  if (cis.length >= 2){
+    const a = cis[cis.length - 2], b = last;
+    if (dGap(b.date, todayISO()) <= 3 && (b.pain > a.pain + 1 || (b.worst != null ? b.worst : b.pain) > (a.worst != null ? a.worst : a.pain) + 1))
+      return { w: "regress", why: "symptoms spiked after recent loading — step back and re-test lighter" };
+  }
+  if (last && last.ctx === "rest" && last.pain >= 3 && injDay(inj) > 14)
+    return { w: "hold", why: "pain at rest — hold volume, settle irritability first" };
+  if (inj.chronic && chronicHot(inj))
+    return { w: "hold", why: "flared — keep loading gentle until it settles" };
+  if (!last)
+    return { w: "hold", why: "no check-ins yet — get a pain report before progressing" };
+  if (dGap(last.date, todayISO()) > 7)
+    return { w: "hold", why: "no recent check-in — confirm symptoms before progressing" };
+  return { w: "progress", why: "symptoms stable or improving under current loading — graded progression reasonable" };
+}
+function callColor(w){ return w === "progress" ? "#5fb48a" : w === "hold" ? "#d4a04d" : "#c95f5f"; }
+
 function needsPostLoadCheck(c, inj){
   const M = new Set(inj.muscles||[]);
   const lastCi = lastCheckIn(inj);
@@ -1538,6 +1604,14 @@ function healingIndex(c, inj){
       const coverage = tested.length / tol.rows.length;
       parts.push({ k:"load", v: Math.max(0, Math.min(100, Math.round(median * (0.6 + 0.4*coverage)))), w: prof.load });
       if (tol.rows.some(r=>r.flared)) flags.push("recent flare after loading — tolerance discounted");
+    }
+    if (tol.flags) for (const f of tol.flags) flags.push(f);
+  }
+  if (!parts.some(p=>p.k==="load")){
+    const expos = bandExposures(c, inj).filter(e=>!e.flared);
+    if (expos.length){
+      parts.push({ k:"load", v: Math.min(45, 20 + 8*expos.length), w: prof.load });
+      flags.push("load signal from early-phase banded exposure only — capacity not yet tested");
     }
   }
   const ci = lastCheckIn(inj);
@@ -1583,6 +1657,7 @@ function healingBar(c, i){
     ${h&&h.capped?`<div class="muted" style="font-size:10px;margin-top:3px;color:#d4a04d">Capped at ${h.cap} by tissue timeline (day ${injDay(i)}) — numbers can look better than biology allows.</div>`:""}
     ${h&&h.flags&&h.flags.length?h.flags.map(f=>`<div style="font-size:10px;margin-top:3px;color:#e0a8a8">⚠ ${f}</div>`).join(""):""}
     ${a&&a.note?`<div class="muted" style="font-size:10px;margin-top:3px">Claude, ${fmtDate(a.date)}: ${esc(a.note)}</div>`:""}
+    ${(function(){ const pc = progressCall(c, i); return `<div style="font-size:11px;margin-top:5px"><span style="font-weight:800;color:${callColor(pc.w)};text-transform:uppercase">today: ${pc.w}</span> <span style="color:#8b93a5">— ${pc.why}</span></div>`; })()}
   </div>`;
 }
 
@@ -1622,14 +1697,14 @@ function liftSeries(c){
           if (sd.weight == null) continue;
           const r = repN(sd.reps), e = e1rm(sd.weight, r);
           vol += sd.weight * r;
-          if (!top || e > top.e1) top = { w: sd.weight, r, e1: e };
+          if (!top || e > top.e1) top = { w: sd.weight, r, e1: e, int: sd.intensity || x.intensity };
         }
       } else if (x.weight != null){
         const r = repN(x.reps);
         vol = x.weight * r * (x.sets || 1);
-        top = { w: x.weight, r, e1: e1rm(x.weight, r) };
+        top = { w: x.weight, r, e1: e1rm(x.weight, r), int: x.intensity };
       }
-      if (top){ (map[x.name] = map[x.name] || []).push({ date: s.date, w: top.w, r: top.r, e1: top.e1, ...(top.bw?{bw:true}:{}), ...(top.du?{du:true, unit:top.unit}:{}), vol }); }
+      if (top){ (map[x.name] = map[x.name] || []).push({ date: s.date, w: top.w, r: top.r, e1: top.e1, ...(top.int?{int:top.int}:{}), ...(top.bw?{bw:true}:{}), ...(top.du?{du:true, unit:top.unit}:{}), vol }); }
     }
   }
   return map;
