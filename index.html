@@ -791,7 +791,7 @@ const INJURY_REFS = {
 };
 function activeInjuries(c){ return (c.injuries||[]).filter(i=>i.status!=="cleared"); }
 function chronicHot(i){ const ci = lastCheckIn(i); if (!ci) return false; const p = ci.worst != null ? ci.worst : ci.pain; return p >= 4 && E.daysBetween(ci.date, todayISO()) <= 7; }
-function ciStr(ci){ return `pain ${ci.pain}/10${ci.worst!=null||ci.best!=null?` (best ${ci.best??"–"} · worst ${ci.worst??"–"})`:""}`; }
+function ciStr(ci){ return `pain ${ci.pain}/10${ci.worst!=null||ci.best!=null?` (best ${ci.best??"–"} · worst ${ci.worst??"–"}${ci.ctx?` ${ci.ctx==="rest"?"at rest":ci.ctx==="daily"?"in daily life":"under load"}`:""})`:""}${ci.conf!=null?` · confidence ${ci.conf}/10`:""}`; }
 function flaggedInjuries(c){ return activeInjuries(c).filter(i => !i.chronic || chronicHot(i)); }
 function injuredMuscles(c){ const s=new Set(); for (const i of flaggedInjuries(c)) for (const m of i.muscles||[]) s.add(m); return s; }
 function packUsed(c){ const p=c.pay; if (!p||p.type!=="pack"||!p.started) return 0; return (p.offset||0) + c.sessions.filter(s=>!s.solo && s.date>=p.started).length; }
@@ -908,6 +908,16 @@ function reviewView(){
   const cards = subs.map((s,i)=>{
     const c = S.clients.find(x=>x.id===s.client);
     const name = c ? c.name : s.client;
+    if (s.kind === "paincheck"){
+      const inj = c ? activeInjuries(c) : [];
+      return `<div class="card">
+        <div class="row"><div class="grow"><div class="cname">🩹 ${esc(name)} — injury check-in</div>
+        <div class="csub">${fmtDate(s.date)} · ${esc(s.text)}</div></div></div>
+        <div class="row" style="gap:8px;margin-top:10px">
+          ${c&&inj.length?`<button class="btn2 grow" data-subapprove="${i}">✓ Attach to ${inj.length===1?esc(inj[0].label):"an injury…"}</button>`:`<div class="muted" style="font-size:11px">No active injury on file — reject or log the injury first.</div>`}
+          <button class="btn2 grow" style="color:#e0a8a8" data-subreject="${i}">Reject</button>
+        </div></div>`;
+    }
     if (s.kind === "photo"){
       return `<div class="card">
         <div class="row"><div class="grow"><div class="cname">📸 ${esc(name)} — progress photos taken</div>
@@ -1287,8 +1297,9 @@ function loadTolerance(c, inj){
         if (bestH && bestH.e1) pairs.push({ date: p.date, pct: Math.round(100 * p.e1 / bestH.e1), cur: p, ref: bestH });
       }
       if (!pairs.length) continue;
+      for (const pr of pairs){ if (flaredAfter(inj, pr.date)){ pr.pct = Math.round(pr.pct * 0.75); pr.flared = true; } }
       const lastP = pairs[pairs.length - 1];
-      rows.push({ name: m2[1], pct: lastP.pct, curTxt: fmtTol(lastP.cur), refTxt: fmtTol(lastP.ref) });
+      rows.push({ name: m2[1], pct: lastP.pct, curTxt: fmtTol(lastP.cur), refTxt: fmtTol(lastP.ref), flared: !!lastP.flared });
       for (const pr of pairs){ trendMap[pr.date] = Math.max(trendMap[pr.date] || 0, pr.pct); }
     }
     if (rows.length){
@@ -1310,8 +1321,10 @@ function loadTolerance(c, inj){
     if (!post.length){ rows.push({ name: n, pct: null }); continue; }
     const recent = post.filter(p => dGap(p.date, today) <= 14);
     const curPt = recent.length ? recent.reduce((a, b) => a.e1 > b.e1 ? a : b) : post[post.length - 1];
-    rows.push({ name: n, pct: Math.round(100 * curPt.e1 / baseline), curTxt: fmtTol(curPt), refTxt: fmtTol({ ...curPt, e1: baseline }), stale: !recent.length });
-    for (const p of post){ trendMap[p.date] = Math.max(trendMap[p.date] || 0, Math.round(100 * p.e1 / baseline)); }
+    const fl = flaredAfter(inj, curPt.date);
+    const rawPct = Math.round(100 * curPt.e1 / baseline);
+    rows.push({ name: n, pct: fl ? Math.round(rawPct * 0.75) : rawPct, curTxt: fmtTol(curPt), refTxt: fmtTol({ ...curPt, e1: baseline }), stale: !recent.length, flared: fl });
+    for (const p of post){ const v0 = Math.round(100 * p.e1 / baseline); trendMap[p.date] = Math.max(trendMap[p.date] || 0, flaredAfter(inj, p.date) ? Math.round(v0 * 0.75) : v0); }
   }
   const tested = rows.filter(r => r.pct != null);
   if (!tested.length) return null;
@@ -1351,7 +1364,8 @@ function testsBlock(c, i){
       <input type="text" style="flex:2" id="tn-${i.id}" placeholder="test name (e.g. SLR pain-free)">
       <input type="text" style="width:52px" id="tu-${i.id}" placeholder="unit">
       <input type="number" style="width:58px" id="tt-${i.id}" placeholder="target">
-      <button class="btn-sm" data-testadd="${i.id}">+ Add</button></div>
+      <button class="btn-sm" data-testadd="${i.id}">+ Add</button>
+      <button class="btn-sm" data-psfs="${i.id}">+ PSFS</button></div>
     ${bat?`<button class="btn2" style="width:100%;margin-top:6px" data-cpg="${i.id}">Load ${esc(bat.label)} (CPG reference targets)</button>`:""}
     <div class="muted" style="font-size:10px;margin-top:4px">Reference targets from return-to-activity literature — adjust to your clinical judgment. Unit "0/1" = no/yes.</div>
   </div>`;
@@ -1415,7 +1429,7 @@ function tolBlock(c, i){
   return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
     <div class="row"><div class="grow">
       <div style="font-size:12px;font-weight:800;color:${tolColor(t.pct)}">Load tolerance ${t.pct}% <span style="color:#8b93a5;font-weight:400">${t.mode==="lsi"?`vs ${t.other} side (symmetry)`:"of pre-injury baseline"}${tolArrow(t)}</span></div>
-      ${t.rows.slice(0,4).map(r=>`<div style="font-size:11px;color:#CFD3DC">${esc(r.name)} — ${r.pct==null?'<span style="color:#8b93a5">not tested since onset</span>':`${r.pct}% (${r.curTxt} vs ${r.refTxt})${r.stale?' <span style="color:#8b93a5">· older data</span>':""}`}</div>`).join("")}
+      ${t.rows.slice(0,4).map(r=>`<div style="font-size:11px;color:#CFD3DC">${esc(r.name)} — ${r.pct==null?'<span style="color:#8b93a5">not tested since onset</span>':`${r.pct}% (${r.curTxt} vs ${r.refTxt})${r.flared?' <span style="color:#e0a8a8">· flared after — discounted</span>':""}${r.stale?' <span style="color:#8b93a5">· older data</span>':""}`}</div>`).join("")}
     </div>${tolSpark(t.trend)}</div>
     <div class="muted" style="font-size:10px;margin-top:2px">Reference only — % of ${t.mode==="lsi"?"the uninjured side":"pre-injury capacity"}, not a clearance call.${t.mode==="base"?" Only lifts with pre-injury history are compared.":""}</div>
   </div>`;
@@ -1458,9 +1472,63 @@ function testPct(t){
   if (t.unit === "0/1") return v >= 1 ? 100 : 0;
   return Math.max(0, Math.min(100, Math.round(100 * v / (t.target || 1))));
 }
-/* Healing Index: load 45 / pain 35 / tests 20, redistributed across whatever has data */
+/* per-injury-type weighting profiles (evidence-informed; redistribute when data missing) */
+const WEIGHT_PROFILES = {
+  strain:       { label:"strain",       load:45, pain:35, tests:20 },
+  sprain:       { label:"sprain",       load:45, pain:35, tests:20 },
+  contusion:    { label:"contusion",    load:45, pain:35, tests:20 },
+  tendinopathy: { label:"tendinopathy", load:55, pain:15, tests:30 }, /* pain with loading is expected — capacity leads */
+  postop:       { label:"post-op",      load:35, pain:25, tests:40 }, /* protocol/milestone driven */
+  chronic:      { label:"chronic",      load:35, pain:20, tests:45 }, /* function leads; pain de-weighted */
+  other:        { label:"standard",     load:45, pain:35, tests:20 },
+};
+function profileFor(inj){ return inj.chronic ? WEIGHT_PROFILES.chronic : (WEIGHT_PROFILES[inj.type] || WEIGHT_PROFILES.other); }
+
+/* biologic phase caps: the index cannot outrun tissue timelines (not applied to chronic) */
+const PHASE_CAPS = {
+  strain:    { "1":[[7,55],[14,75]], "2":[[14,45],[28,70],[42,85]], "3":[[28,40],[56,65],[90,85]] },
+  sprain:    { "1":[[7,55],[14,80]], "2":[[14,50],[28,75]],          "3":[[28,45],[60,70],[90,85]] },
+  tendinopathy: { "1":[[21,60],[42,80]], "2":[[21,60],[42,80]], "3":[[21,60],[42,80]] },
+  postop:    { "1":[[42,40],[90,60],[180,85]], "2":[[42,40],[90,60],[180,85]], "3":[[42,40],[90,60],[180,85]] },
+  contusion: { "1":[[7,60],[14,85]], "2":[[7,60],[14,85]], "3":[[14,55],[28,80]] },
+};
+function phaseCap(inj){
+  if (inj.chronic) return null;
+  const caps = (PHASE_CAPS[inj.type]||{})[inj.grade||"1"];
+  if (!caps) return null;
+  const day = injDay(inj);
+  for (const [until, cap] of caps) if (day <= until) return cap;
+  return null;
+}
+
+/* 24-48h symptom-response rule: a session only fully counts if no flare followed it */
+function needsPostLoadCheck(c, inj){
+  const M = new Set(inj.muscles||[]);
+  const lastCi = lastCheckIn(inj);
+  for (const s of c.sessions){
+    if (dGap(s.date, todayISO()) > 2) break; /* sessions sorted desc */
+    if (!s.exercises) continue;
+    if (!s.exercises.some(x => exMuscles(x.name).p.some(m => M.has(m)))) continue;
+    if (!lastCi || lastCi.date < s.date) return true;
+  }
+  return false;
+}
+function flaredAfter(inj, dateISO){
+  const cis = inj.checkIns || [];
+  const prev = [...cis].reverse().find(x => x.date <= dateISO);
+  const post = cis.find(x => x.date > dateISO && dGap(x.date, dateISO) <= 2);
+  if (!post) return false; /* no data = neutral, never a penalty */
+  const pv = prev ? prev.pain : null, pw = prev ? (prev.worst != null ? prev.worst : prev.pain) : null;
+  const cv = post.pain, cw = post.worst != null ? post.worst : post.pain;
+  if (prev) return cv > pv + 1 || cw > pw + 1;
+  return cw >= 5;
+}
+
+/* Healing Index: profile-weighted, redistributed across whatever has data */
 function healingIndex(c, inj){
+  const prof = profileFor(inj);
   const parts = [];
+  const flags = [];
   const tol = loadTolerance(c, inj);
   if (tol){
     const tested = tol.rows.filter(r => r.pct != null).map(r => Math.min(r.pct, 110));
@@ -1468,7 +1536,8 @@ function healingIndex(c, inj){
       const sorted = [...tested].sort((a,b)=>a-b);
       const median = sorted[Math.floor(sorted.length/2)];
       const coverage = tested.length / tol.rows.length;
-      parts.push({ k:"load", v: Math.max(0, Math.min(100, Math.round(median * (0.6 + 0.4*coverage)))), w:45 });
+      parts.push({ k:"load", v: Math.max(0, Math.min(100, Math.round(median * (0.6 + 0.4*coverage)))), w: prof.load });
+      if (tol.rows.some(r=>r.flared)) flags.push("recent flare after loading — tolerance discounted");
     }
   }
   const ci = lastCheckIn(inj);
@@ -1479,14 +1548,19 @@ function healingIndex(c, inj){
     const a30 = avg((inj.checkIns||[]).filter(x=>E.daysBetween(x.date,todayISO())<=30).map(x=>x.pain));
     const a60 = avg((inj.checkIns||[]).filter(x=>{const d=E.daysBetween(x.date,todayISO());return d>30&&d<=60;}).map(x=>x.pain));
     if (a30!=null && a60!=null){ if (a30 < a60 - 0.3) p += 5; else if (a30 > a60 + 0.3) p -= 10; }
-    parts.push({ k:"pain", v: Math.max(0, Math.min(100, Math.round(p))), w:35 });
+    if (ci.ctx === "rest" && cur >= 3 && injDay(inj) > 14){ p -= 10; flags.push("pain at rest beyond day 14 — atypical, monitor"); }
+    if (ci.conf != null) p = Math.round(p * 0.8 + (ci.conf * 10) * 0.2);
+    parts.push({ k:"pain", v: Math.max(0, Math.min(100, Math.round(p))), w: prof.pain });
   }
   const tp = (inj.tests||[]).map(testPct).filter(v=>v!=null);
-  if (tp.length) parts.push({ k:"tests", v: Math.round(tp.reduce((s,v)=>s+v,0)/tp.length), w:20 });
+  if (tp.length) parts.push({ k:"tests", v: Math.round(tp.reduce((s,v)=>s+v,0)/tp.length), w: prof.tests });
   if (!parts.length) return null;
   const W = parts.reduce((s,p)=>s+p.w,0);
-  const score = Math.round(parts.reduce((s,p)=>s+p.v*p.w,0)/W);
-  return { score, parts, tol };
+  let score = Math.round(parts.reduce((s,p)=>s+p.v*p.w,0)/W);
+  const cap = phaseCap(inj);
+  let capped = false;
+  if (cap != null && score > cap){ score = cap; capped = true; }
+  return { score, parts, tol, profile: prof.label, cap, capped, flags };
 }
 function aiAssessFor(c, i){
   const a = (S.aiAssess || {})[c.id + ":" + i.id];
@@ -1504,8 +1578,10 @@ function healingBar(c, i){
   return `<div style="margin-top:8px">
     <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">
       <span style="font-weight:800;color:${col}">Healing Index ${score} <span style="color:#8b93a5;font-weight:400">· ${word}${a&&h&&a.score!==h.score?` · Claude-adjusted (formula ${h.score})`:a?" · Claude-adjusted":""}</span></span>
-      ${h?`<span style="color:#8b93a5">${h.parts.map(p=>`${p.k} ${p.v}`).join(" · ")}</span>`:""}</div>
+      ${h?`<span style="color:#8b93a5">${h.parts.map(p=>`${p.k} ${p.v}`).join(" · ")} · ${h.profile} weights</span>`:""}</div>
     <div class="bar-track"><div class="bar-fill" style="width:${score}%;background:linear-gradient(90deg,${col}88,${col})"></div></div>
+    ${h&&h.capped?`<div class="muted" style="font-size:10px;margin-top:3px;color:#d4a04d">Capped at ${h.cap} by tissue timeline (day ${injDay(i)}) — numbers can look better than biology allows.</div>`:""}
+    ${h&&h.flags&&h.flags.length?h.flags.map(f=>`<div style="font-size:10px;margin-top:3px;color:#e0a8a8">⚠ ${f}</div>`).join(""):""}
     ${a&&a.note?`<div class="muted" style="font-size:10px;margin-top:3px">Claude, ${fmtDate(a.date)}: ${esc(a.note)}</div>`:""}
   </div>`;
 }
@@ -1696,7 +1772,7 @@ function tabInjuries(c){
   const cards = act.map(i=>{
     if (i.chronic){
       const ci = lastCheckIn(i);
-      const stale = ci ? E.daysBetween(ci.date, todayISO()) > 7 : true;
+      const stale = (ci ? E.daysBetween(ci.date, todayISO()) > 7 : true) || needsPostLoadCheck(c, i);
       const pains = (i.checkIns||[]).slice(-12).map(x=>x.pain);
       const spark = pains.length > 1 ? `<svg viewBox="0 0 120 26" style="width:120px;height:26px">${pains.map((p,j)=>{
           const x = 6 + 108*j/(pains.length-1), y = 22 - 18*p/10;
@@ -1728,6 +1804,11 @@ function tabInjuries(c){
   <span class="lbl">now</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="pain-${i.id}" placeholder="0">
 </div>
 <div class="minirow">
+  <span class="lbl">worst was</span><select id="ctx-${i.id}" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px;padding:6px">
+    <option value="">—</option><option value="rest">at rest</option><option value="daily">daily life</option><option value="load">under load</option></select>
+  <span class="lbl">confidence</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="conf-${i.id}" placeholder="0-10">
+</div>
+<div class="minirow">
   <input type="text" style="flex:1" id="cinote-${i.id}" placeholder="note (optional)">
   <button class="btn-sm" data-injci="${i.id}">Check in</button>
 </div>
@@ -1739,7 +1820,7 @@ function tabInjuries(c){
     const day = injDay(i), pct = Math.min(100, Math.round(day / i.expHi * 100));
     const inWindow = day >= i.expLo;
     const ci = lastCheckIn(i);
-    const stale = ci ? E.daysBetween(ci.date, todayISO()) > 7 : (day > 3);
+    const stale = (ci ? E.daysBetween(ci.date, todayISO()) > 7 : (day > 3)) || needsPostLoadCheck(c, i);
     const pains = (i.checkIns||[]).map(x=>x.pain);
     const spark = pains.length > 1 ? `<svg viewBox="0 0 120 26" style="width:120px;height:26px">${pains.map((p,j)=>{
         const x = 6 + 108*j/(pains.length-1), y = 22 - 18*p/10;
@@ -1768,6 +1849,11 @@ function tabInjuries(c){
   <span class="lbl">best</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painb-${i.id}" placeholder="0">
   <span class="lbl">worst</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="painw-${i.id}" placeholder="0">
   <span class="lbl">now</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="pain-${i.id}" placeholder="0">
+</div>
+<div class="minirow">
+  <span class="lbl">worst was</span><select id="ctx-${i.id}" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px;padding:6px">
+    <option value="">—</option><option value="rest">at rest</option><option value="daily">daily life</option><option value="load">under load</option></select>
+  <span class="lbl">confidence</span><input type="number" inputmode="numeric" min="0" max="10" style="width:46px" id="conf-${i.id}" placeholder="0-10">
 </div>
 <div class="minirow">
   <input type="text" style="flex:1" id="cinote-${i.id}" placeholder="note (optional)">
@@ -2222,6 +2308,29 @@ function clientLogLink(c){
 function approveSub(idx){
   const s = pendingSubs[idx]; if (!s) return;
   const c = S.clients.find(x=>x.id===s.client); if (!c) return;
+  if (s.kind === "paincheck"){
+    const injs = activeInjuries(c);
+    if (!injs.length){ toast("No active injury to attach to — log it first"); return; }
+    let inj = injs[0];
+    if (injs.length > 1){
+      const pick = prompt("Attach to which injury?\n" + injs.map((x,n)=>`${n+1}) ${x.label}`).join("\n"), "1");
+      const n = parseInt(pick||"", 10);
+      if (!n || n < 1 || n > injs.length) return;
+      inj = injs[n-1];
+    }
+    const num = rx => { const m = s.text.match(rx); return m ? Math.max(0, Math.min(10, +m[1])) : null; };
+    const nw = num(/now\s*(\d+)/i), bb = num(/best\s*(\d+)/i), ww = num(/worst\s*(\d+)/i);
+    if (nw == null && bb == null && ww == null){ toast("No pain numbers found in that check-in"); return; }
+    const entry = { date: s.date || todayISO(), pain: nw != null ? nw : (ww != null ? ww : bb) };
+    if (bb != null) entry.best = Math.min(bb, entry.pain);
+    if (ww != null) entry.worst = Math.max(ww, entry.pain);
+    const nm = s.text.match(/—\s*([^—]+)$/);
+    if (nm && !/^\s*best/i.test(nm[1])) entry.note = nm[1].trim();
+    inj.checkIns = inj.checkIns || []; inj.checkIns.push(entry);
+    inj.checkIns.sort((a,b)=>a.date.localeCompare(b.date));
+    const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
+    ackSub(sid); render(); toast(`Check-in attached to ${inj.label}`); return;
+  }
   if (s.kind === "photo"){
     c.photoLog = c.photoLog || [];
     const d = s.date || todayISO();
@@ -2325,7 +2434,7 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
@@ -2350,6 +2459,11 @@ function bind(){
       save(); render(); toast("Test added"); }
     else if (ds.testdel){ const [iid, ti] = ds.testdel.split(":"); const c=client(); const inj=c.injuries.find(x=>x.id===iid); if(!inj) return;
       if (confirm("Remove this test and its history?")){ inj.tests.splice(+ti,1); save(); render(); } }
+    else if (ds.psfs){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.psfs); if(!inj) return;
+      const act = prompt("PSFS — an activity that matters to THEM (e.g. carrying groceries, surfing, sitting through a movie):");
+      if (!act || !act.trim()) return;
+      inj.tests = inj.tests||[]; inj.tests.push({ name: "PSFS: " + act.trim(), unit: "/10", target: 8, entries: [] });
+      save(); render(); toast("PSFS activity added — client rates 0-10 ability, target 8+"); }
     else if (ds.cpg){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.cpg); if(!inj) return;
       const bat = cpgFor(inj); if (!bat) return;
       inj.tests = inj.tests||[];
@@ -2373,6 +2487,9 @@ function bind(){
       if (wv!=="") entry.worst = clamp10(wv);
       if (entry.best!=null && entry.best>entry.pain) entry.best = entry.pain;
       if (entry.worst!=null && entry.worst<entry.pain) entry.worst = entry.pain;
+      const ctxEl = $("#ctx-"+ds.injci), confEl = $("#conf-"+ds.injci);
+      if (ctxEl && ctxEl.value) entry.ctx = ctxEl.value;
+      if (confEl && confEl.value !== "") entry.conf = clamp10(confEl.value);
       i.checkIns = i.checkIns||[]; i.checkIns.push(entry);
       save(); render(); toast("Check-in saved"); }
     else if (ds.injclear){ const c=client(); const i=c.injuries.find(x=>x.id===ds.injclear); if(!i) return;

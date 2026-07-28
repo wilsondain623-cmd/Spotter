@@ -480,6 +480,7 @@ const todayISO = () => { const d=new Date(); return d.getFullYear()+"-"+String(d
 let submitted = false;
 let recSent = false;
 let phSent = false;
+let pcSent = false;
 
 function preview(text){
   if (!text.trim()) return "";
@@ -506,6 +507,20 @@ function recCard(){
     <label>Recovery</label><input type="text" id="rt" placeholder="e.g. whoop 72, slept 7.5h, feel 4 — or garmin body battery 60" value="${esc(rt)}">
     <div id="rprev">${recPreview(rt)}</div>
     <button class="btn" id="sendrec" style="margin-top:12px">Send check-in</button>
+  </div>`;
+}
+
+function painCard(){
+  if (pcSent) return `<div class="card done" style="padding:18px"><div style="font-size:24px">✓</div><div class="sub" style="margin-top:4px">Check-in sent to your coach</div></div>`;
+  return `<div class="card"><h1 style="font-size:16px">Injury check-in <span style="color:var(--dim);font-weight:400;font-size:12px">(if your coach is tracking one)</span></h1>
+    <div class="sub">Since your last check-in: best it felt, worst it felt, and right now (0 = nothing, 10 = worst imaginable).</div>
+    <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+      <label style="margin:0;flex:1">best<input type="number" inputmode="numeric" min="0" max="10" id="pcb" placeholder="0"></label>
+      <label style="margin:0;flex:1">worst<input type="number" inputmode="numeric" min="0" max="10" id="pcw" placeholder="0"></label>
+      <label style="margin:0;flex:1">now<input type="number" inputmode="numeric" min="0" max="10" id="pcn" placeholder="0"></label>
+    </div>
+    <label>note (optional)</label><input type="text" id="pcnote" placeholder="e.g. only tight going down stairs">
+    <button class="btn" id="sendpc" style="margin-top:12px">Send check-in</button>
   </div>`;
 }
 
@@ -542,7 +557,8 @@ function render(){
       <div class="muted" style="margin-top:10px">Works with anything — bodyweight, machines, cardio. Not sure of a name? Just write it, your coach handles the rest.</div>
     </div>
     ${recCard()}
-    ${photoCard()}`;
+    ${photoCard()}
+    ${painCard()}`;
   const ta = app.querySelector("#t");
   const pv = app.querySelector("#prev");
   pv.innerHTML = preview(t);
@@ -556,6 +572,8 @@ function render(){
   }
   const phb = app.querySelector("#sendphoto");
   if (phb) phb.addEventListener("click", sendPhoto);
+  const pcb = app.querySelector("#sendpc");
+  if (pcb) pcb.addEventListener("click", sendPain);
 }
 
 function send(){
@@ -572,6 +590,21 @@ function send(){
     else { btn.disabled=false; btn.textContent="Send to coach"; alert("Couldn't send: "+(d.error||"try again")); }
   }).catch(e=>{ btn.disabled=false; btn.textContent="Send to coach"; alert("Network error — check your connection and retry."); });
 }
+function sendPain(){
+  const b = app.querySelector("#pcb").value, w = app.querySelector("#pcw").value, n = app.querySelector("#pcn").value;
+  if (b==="" && w==="" && n===""){ alert("Enter at least one pain score 0-10"); return; }
+  const note = app.querySelector("#pcnote").value.trim();
+  const text = `injury check-in — best ${b===""?"?":b}, worst ${w===""?"?":w}, now ${n===""?"?":n}${note?` — ${note}`:""}`;
+  const btn = app.querySelector("#sendpc"); btn.disabled = true; btn.textContent = "Sending…";
+  fetch(`${worker}/submit?c=${encodeURIComponent(client)}`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ kind:"paincheck", date: todayISO(), text })
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok){ pcSent = true; render(); }
+    else { btn.disabled=false; btn.textContent="Send check-in"; alert("Could not send: "+(d.error||"try again")); }
+  }).catch(()=>{ btn.disabled=false; btn.textContent="Send check-in"; alert("Network error — retry."); });
+}
+
 function sendPhoto(){
   const btn = app.querySelector("#sendphoto"); btn.disabled = true; btn.textContent = "Sending…";
   fetch(`${worker}/submit?c=${encodeURIComponent(client)}`, {
