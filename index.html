@@ -270,12 +270,12 @@ function sessionFatigue(exercises) {
 }
 
 /* Full update: decay old snapshot to session date, add session fatigue with DOMS bump, cap. */
-function applySession(snapshot, lastUpdated, sessionDate, exercises) {
+function applySession(snapshot, lastUpdated, sessionDate, exercises, tolF = 1) {
   const days = daysBetween(lastUpdated, sessionDate);
   const decayed = decaySnapshot(snapshot, days);
   const add = sessionFatigue(exercises);
   const out = {};
-  for (const m of MUSCLES) out[m] = Math.min(CAP, decayed[m] + add[m] * DOMS_BUMP);
+  for (const m of MUSCLES) out[m] = Math.min(CAP, decayed[m] + add[m] * DOMS_BUMP * tolF);
   return out;
 }
 
@@ -299,9 +299,9 @@ function sessionSys(exercises){
   }
   return t;
 }
-function applySys(v, lastUpdated, date, exercises){
+function applySys(v, lastUpdated, date, exercises, tolF = 1){
   const days = daysBetween(lastUpdated, date);
-  return Math.min(CAP, v * Math.pow(SYS_DECAY, days) + sessionSys(exercises));
+  return Math.min(CAP, v * Math.pow(SYS_DECAY, days) + sessionSys(exercises) * tolF);
 }
 function decaySys(v, days){ return Math.max(0, v * Math.pow(SYS_DECAY, days)); }
 
@@ -794,6 +794,25 @@ function chronicHot(i){ const ci = lastCheckIn(i); if (!ci) return false; const 
 function ciStr(ci){ return `pain ${ci.pain}/10${ci.worst!=null||ci.best!=null?` (best ${ci.best??"–"} · worst ${ci.worst??"–"}${ci.ctx?` ${ci.ctx==="rest"?"at rest":ci.ctx==="daily"?"in daily life":"under load"}`:""})`:""}${ci.conf!=null?` · confidence ${ci.conf}/10`:""}`; }
 function flaggedInjuries(c){ return activeInjuries(c).filter(i => !i.chronic || chronicHot(i)); }
 function injuredMuscles(c){ const s=new Set(); for (const i of flaggedInjuries(c)) for (const m of i.muscles||[]) s.add(m); return s; }
+/* training age: repeated-bout adaptation — accrual scaled down max ~20% at 10+ consistent years */
+function trainingYears(c, atISO){
+  if (!c.trainStart) return 0;
+  const start = new Date(String(c.trainStart).length === 4 ? c.trainStart + "-01-01" : c.trainStart);
+  if (isNaN(start)) return 0;
+  const at = atISO ? new Date(atISO + "T00:00:00") : new Date();
+  return Math.max(0, (at - start) / (365.25 * 86400000));
+}
+function tolFactorAt(c, dateISO, sessions){
+  const y = trainingYears(c, dateISO);
+  if (!y) return 1;
+  const adapt = 0.20 * (1 - Math.exp(-y / 4)); /* diminishing returns, ~cap by 10y */
+  /* consistency gate: session count in the 28 days before this date */
+  const cut = new Date(new Date(dateISO + "T00:00:00") - 28 * 86400000);
+  const cutISO = cut.getFullYear() + "-" + String(cut.getMonth() + 1).padStart(2, "0") + "-" + String(cut.getDate()).padStart(2, "0");
+  const n = (sessions || c.sessions).filter(s => s.date > cutISO && s.date <= dateISO).length;
+  const gate = n >= 8 ? 1 : n >= 4 ? 0.75 : 0.5; /* never below half credit — history still counts */
+  return Math.round((1 - adapt * gate) * 1000) / 1000;
+}
 function packUsed(c){ const p=c.pay; if (!p||p.type!=="pack"||!p.started) return 0; return (p.offset||0) + c.sessions.filter(s=>!s.solo && s.date>=p.started).length; }
 function checkPackRenewal(c){
   const p = c.pay; if (!p || p.type !== "pack" || !p.started) return;
@@ -1170,6 +1189,8 @@ function tabBrief(c){
     <div style="margin-top:6px"><span class="bb">Systemic load:</span> ${E.round1(E.decaySys(c.sysFatigue||0, b.daysSince))} / 10 (${sysWord(E.decaySys(c.sysFatigue||0, b.daysSince))})${E.decaySys(c.sysFatigue||0, b.daysSince)>6.5?" — consider a lighter day regardless of what looks fresh":""}</div>
     ${rr&&rr.score!=null&&!rr.stale?`<div style="margin-top:6px"><span class="bb">Readiness:</span> <span style="color:${readyColor(rr.score)};font-weight:800">${rr.score}</span> / 100 (${readyWord(rr.score)})</div>`:""}
     <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">${(rr&&rr.score!=null&&!rr.stale&&rr.score<34)?`<span style="color:#e0a8a8;font-weight:700">Readiness is low (${rr.score}) — recovery is impaired; keep today light regardless of what looks fresh.</span><br>`:""}${esc(b.suggestion)}</div>
+    ${(function(){ if (!c.trainStart) return ""; const tf = tolFactorAt(c, todayISO()); const y = trainingYears(c);
+      return `<div style="margin-top:6px"><span class="bb">Training age:</span> ${Math.round(y*10)/10} yrs · fatigue accrual ×${tf}${tf>0.95?"":` <span style="color:#8b93a5">(adapted system — tolerates more)</span>`}</div>`; })()}
     ${payBrief(c)}${photoBrief(c)}
     ${c.nextPlan?`<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px"><span class="bb">Planned:</span> ${esc(c.nextPlan)}</div>`:""}
   </div>${volumeCard(c)}`;
@@ -2097,8 +2118,9 @@ function rebuildClient(c){
   if (structured.length && structured[0].date < last) last = structured[0].date;
   for (const s of structured){
     const items = s.exercises.map(x=>{ const m = exMuscles(x.name); return { ...x, primary:m.p, secondary:m.s, sys:m.sys }; });
-    sys = E.applySys(sys, last, s.date, items);
-    snap = E.applySession(snap, last, s.date, items);
+    const tf = tolFactorAt(c, s.date, structured);
+    sys = E.applySys(sys, last, s.date, items, tf);
+    snap = E.applySession(snap, last, s.date, items, tf);
     last = s.date;
   }
   c.snapshot = snap; c.sysFatigue = sys; c.lastUpdated = last;
@@ -2301,6 +2323,7 @@ function clientMenu(){
     <button class="btn2" style="width:100%" id="cmProfile">Edit profile / goals / injuries</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmPhoto">📸 Log progress photos today</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmPay">Payment & sessions…</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="cmTrain">Training history${c.trainStart?` (since ${esc(c.trainStart)})`:"…"}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmRename">Rename client</button>
     ${S.syncUrl?`<button class="btn2" style="width:100%;margin-top:8px" id="cmLogLink">Copy solo-log link</button>`:""}
     <button class="btn2" style="width:100%;margin-top:8px;color:#e0a8a8" id="cmDelete">Delete client…</button>
@@ -2309,6 +2332,11 @@ function clientMenu(){
   wrap.addEventListener("click", ev=>{
     if (ev.target===wrap) wrap.remove();
     if (ev.target.id==="cmProfile"){ const p = prompt("Profile / goals / injury notes:", c.profile||""); if (p!==null){ c.profile=p.trim(); save(); render(); } wrap.remove(); }
+    if (ev.target.id==="cmTrain"){ const cur = c.trainStart || "";
+      const v = prompt("Training since (year, e.g. 2015 — rough guess is fine; blank to clear):", cur);
+      if (v !== null){ const t = v.trim(); if (!t){ delete c.trainStart; } else if (/^\d{4}(-\d{2}(-\d{2})?)?$/.test(t)){ c.trainStart = t; } else { toast("Use a year like 2015"); wrap.remove(); return; }
+        save(); render(); toast(t?`Training age set — fatigue model now expects a ${Math.round(trainingYears(c))}-year-adapted system`:"Training age cleared"); }
+      wrap.remove(); }
     if (ev.target.id==="cmPhoto"){ c.photoLog=c.photoLog||[]; if (!c.photoLog.includes(todayISO())){ c.photoLog.push(todayISO()); c.photoLog.sort(); save(); render(); toast("Progress photos logged for today"); } else toast("Already logged today"); wrap.remove(); }
     if (ev.target.id==="cmPay"){ wrap.remove(); payMenu(c); }
     if (ev.target.id==="cmRename"){ const n = prompt("New name:", c.name); if (n && n.trim()){ c.name=n.trim(); save(); render(); } wrap.remove(); }

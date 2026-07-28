@@ -206,12 +206,12 @@ function sessionFatigue(exercises) {
 }
 
 /* Full update: decay old snapshot to session date, add session fatigue with DOMS bump, cap. */
-function applySession(snapshot, lastUpdated, sessionDate, exercises) {
+function applySession(snapshot, lastUpdated, sessionDate, exercises, tolF = 1) {
   const days = daysBetween(lastUpdated, sessionDate);
   const decayed = decaySnapshot(snapshot, days);
   const add = sessionFatigue(exercises);
   const out = {};
-  for (const m of MUSCLES) out[m] = Math.min(CAP, decayed[m] + add[m] * DOMS_BUMP);
+  for (const m of MUSCLES) out[m] = Math.min(CAP, decayed[m] + add[m] * DOMS_BUMP * tolF);
   return out;
 }
 
@@ -235,9 +235,9 @@ function sessionSys(exercises){
   }
   return t;
 }
-function applySys(v, lastUpdated, date, exercises){
+function applySys(v, lastUpdated, date, exercises, tolF = 1){
   const days = daysBetween(lastUpdated, date);
-  return Math.min(CAP, v * Math.pow(SYS_DECAY, days) + sessionSys(exercises));
+  return Math.min(CAP, v * Math.pow(SYS_DECAY, days) + sessionSys(exercises) * tolF);
 }
 function decaySys(v, days){ return Math.max(0, v * Math.pow(SYS_DECAY, days)); }
 
