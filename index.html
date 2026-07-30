@@ -839,16 +839,28 @@ function trainingYears(c, atISO){
   const at = atISO ? new Date(atISO + "T00:00:00") : new Date();
   return Math.max(0, (at - start) / (365.25 * 86400000));
 }
+function layoffSpike(dateISO, sessions){
+  const before = [...new Set((sessions || []).map(s => s.date).filter(x => x < dateISO))].sort();
+  if (!before.length) return 1;
+  let ret = null;
+  for (let i = 1; i < before.length; i++) if (dGap(before[i], before[i-1]) >= 21) ret = before[i];
+  if (dGap(dateISO, before[before.length - 1]) >= 21) ret = dateISO; /* this session IS the return */
+  if (!ret) return 1;
+  const d = dGap(dateISO, ret);
+  if (d > 10) return 1;
+  return Math.round((1 + 0.2 * (1 - d / 10)) * 1000) / 1000;
+}
 function tolFactorAt(c, dateISO, sessions){
+  const spike = layoffSpike(dateISO, sessions || c.sessions);
   const y = trainingYears(c, dateISO);
-  if (!y) return 1;
+  if (!y) return spike;
   const adapt = 0.20 * (1 - Math.exp(-y / 4)); /* diminishing returns, ~cap by 10y */
   /* consistency gate: session count in the 28 days before this date */
   const cut = new Date(new Date(dateISO + "T00:00:00") - 28 * 86400000);
   const cutISO = cut.getFullYear() + "-" + String(cut.getMonth() + 1).padStart(2, "0") + "-" + String(cut.getDate()).padStart(2, "0");
   const n = (sessions || c.sessions).filter(s => s.date > cutISO && s.date <= dateISO).length;
   const gate = n >= 8 ? 1 : n >= 4 ? 0.75 : 0.5; /* never below half credit — history still counts */
-  return Math.round((1 - adapt * gate) * 1000) / 1000;
+  return Math.round((1 - adapt * gate) * spike * 1000) / 1000;
 }
 function packUsed(c){ const p=c.pay; if (!p||p.type!=="pack"||!p.started) return 0; return (p.offset||0) + c.sessions.filter(s=>!s.solo && s.date>=p.started).length; }
 function checkPackRenewal(c){
@@ -1226,8 +1238,12 @@ function tabBrief(c){
     <div style="margin-top:6px"><span class="bb">Systemic load:</span> ${E.round1(E.decaySys(c.sysFatigue||0, b.daysSince))} / 10 (${sysWord(E.decaySys(c.sysFatigue||0, b.daysSince))})${E.decaySys(c.sysFatigue||0, b.daysSince)>6.5?" — consider a lighter day regardless of what looks fresh":""}</div>
     ${rr&&rr.score!=null&&!rr.stale?`<div style="margin-top:6px"><span class="bb">Readiness:</span> <span style="color:${readyColor(rr.score)};font-weight:800">${rr.score}</span> / 100 (${readyWord(rr.score)})</div>`:""}
     <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">${(rr&&rr.score!=null&&!rr.stale&&rr.score<34)?`<span style="color:#e0a8a8;font-weight:700">Readiness is low (${rr.score}) — recovery is impaired; keep today light regardless of what looks fresh.</span><br>`:""}${esc(b.suggestion)}</div>
-    ${(function(){ if (!c.trainStart) return ""; const tf = tolFactorAt(c, todayISO()); const y = trainingYears(c);
-      return `<div style="margin-top:6px"><span class="bb">Training age:</span> ${Math.round(y*10)/10} yrs · fatigue accrual ×${tf}${tf>0.95?"":` <span style="color:#8b93a5">(adapted system — tolerates more)</span>`}</div>`; })()}
+    ${(function(){
+      const sp = layoffSpike(todayISO(), c.sessions);
+      const spNote = sp > 1 ? `<div style="margin-top:6px"><span class="bb">Back from a layoff:</span> <span style="color:#d4a04d">fatigue costs ×${sp} for ~${Math.max(1, Math.round((sp-1)/0.02))} more days — expect extra soreness, ramp deliberately</span></div>` : "";
+      if (!c.trainStart) return spNote;
+      const tf = tolFactorAt(c, todayISO()); const y = trainingYears(c);
+      return `<div style="margin-top:6px"><span class="bb">Training age:</span> ${Math.round(y*10)/10} yrs · fatigue accrual ×${tf}${tf>0.95?"":` <span style="color:#8b93a5">(adapted system — tolerates more)</span>`}</div>` + spNote; })()}
     ${payBrief(c)}${photoBrief(c)}
     ${c.nextPlan?`<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px"><span class="bb">Planned:</span> ${esc(c.nextPlan)}</div>`:""}
   </div>${volumeCard(c)}`;
