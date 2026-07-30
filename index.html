@@ -2440,10 +2440,18 @@ function syncWhoop(){
     .catch(e=>toast("Sync failed: " + e.message));
 }
 
+function genToken(){
+  try { const a = new Uint8Array(12); crypto.getRandomValues(a); return [...a].map(b=>b.toString(36)).join("").slice(0,18); }
+  catch(e){ return (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)).slice(0,18); }
+}
+function ensureToken(c){
+  if (!c.token){ c.token = genToken(); save(); autoBackup(true); }
+  return c.token;
+}
 function clientLogLink(c){
   if (!S.syncUrl) return null;
   const base = location.origin + location.pathname.replace(/[^/]*$/, "");
-  return `${base}log.html?c=${encodeURIComponent(c.id)}&w=${encodeURIComponent(S.syncUrl.replace(/\/+$/,""))}`;
+  return `${base}log.html?c=${encodeURIComponent(c.id)}&t=${encodeURIComponent(ensureToken(c))}&w=${encodeURIComponent(S.syncUrl.replace(/\/+$/,""))}`;
 }
 
 function approveSub(idx){

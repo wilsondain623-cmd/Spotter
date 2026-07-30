@@ -1,0 +1,260 @@
+/* ============================================================
+   Dwil Spotter — WHOOP sync worker (Cloudflare Workers)
+   Endpoints:
+     GET /auth?client=<spotterClientId>   -> redirect to WHOOP consent
+     GET /callback                        -> token exchange, stores refresh token in KV
+     GET /sync?client=<spotterClientId>&key=<APP_KEY> -> last 14 days recovery+sleep JSON
+
+   Required setup (Cloudflare dashboard → Worker → Settings):
+     Variables:  WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET, APP_KEY (any long random string),
+                 ALLOWED_ORIGIN = https://wilsondain623-cmd.github.io
+     KV binding: TOKENS
+   WHOOP app setup (developer dashboard):
+     Redirect URL = https://<your-worker>.workers.dev/callback
+     Scopes: read:recovery read:sleep read:cycles read:profile offline
+   ============================================================ */
+
+const WHOOP_AUTH = "https://api.prod.whoop.com/oauth/oauth2/auth";
+const WHOOP_TOKEN = "https://api.prod.whoop.com/oauth/oauth2/token";
+const WHOOP_API = "https://api.prod.whoop.com/developer";
+const SCOPES = "read:recovery read:sleep read:cycles read:profile offline";
+
+function cors(env, body, status = 200, type = "application/json") {
+  return new Response(body, { status, headers: {
+    "Content-Type": type,
+    "Access-Control-Allow-Origin": env.ALLOWED_ORIGIN || "*",
+    "Cache-Control": "no-store",
+  }});
+}
+
+async function tokenRequest(env, params) {
+  const res = await fetch(WHOOP_TOKEN, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.WHOOP_CLIENT_ID,
+      client_secret: env.WHOOP_CLIENT_SECRET,
+      ...params,
+    }),
+  });
+  if (!res.ok) throw new Error("token exchange failed: " + res.status + " " + await res.text());
+  return res.json();
+}
+
+async function freshAccessToken(env, clientId) {
+  const stored = await env.TOKENS.get("rt:" + clientId);
+  if (!stored) return null;
+  const tok = await tokenRequest(env, { grant_type: "refresh_token", refresh_token: stored, scope: "offline" });
+  if (tok.refresh_token) await env.TOKENS.put("rt:" + clientId, tok.refresh_token);
+  return tok.access_token;
+}
+
+async function whoopGet(access, path) {
+  const res = await fetch(WHOOP_API + path, { headers: { Authorization: "Bearer " + access } });
+  if (!res.ok) throw new Error("whoop api " + path + " -> " + res.status);
+  return res.json();
+}
+
+async function getState(env) {
+  const raw = await env.TOKENS.get("backup:latest");
+  if (!raw) return null;
+  try { return JSON.parse(raw).state || null; } catch { return null; }
+}
+async function clientByToken(env, id, t) {
+  if (!id || !t) return null;
+  const state = await getState(env);
+  if (!state || !Array.isArray(state.clients)) return null;
+  const c = state.clients.find(x => x.id === id);
+  return (c && c.token && c.token === t) ? c : null;
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const workerBase = url.origin;
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: {
+        "Access-Control-Allow-Origin": env.ALLOWED_ORIGIN || "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Max-Age": "86400",
+      }});
+    }
+
+    try {
+      if (url.pathname === "/auth") {
+        const clientId = url.searchParams.get("client");
+        if (!clientId) return cors(env, "missing ?client", 400, "text/plain");
+        const state = clientId + "." + crypto.randomUUID();
+        await env.TOKENS.put("state:" + state, "1", { expirationTtl: 900 });
+        const q = new URLSearchParams({
+          response_type: "code",
+          client_id: env.WHOOP_CLIENT_ID,
+          redirect_uri: workerBase + "/callback",
+          scope: SCOPES,
+          state,
+        });
+        return Response.redirect(WHOOP_AUTH + "?" + q, 302);
+      }
+
+      if (url.pathname === "/callback") {
+        const code = url.searchParams.get("code");
+        const state = url.searchParams.get("state") || "";
+        const ok = await env.TOKENS.get("state:" + state);
+        if (!code || !ok) return cors(env, "invalid state or code", 400, "text/plain");
+        await env.TOKENS.delete("state:" + state);
+        const clientId = state.split(".")[0];
+        const tok = await tokenRequest(env, {
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: workerBase + "/callback",
+        });
+        if (!tok.refresh_token) return cors(env, "no refresh token returned — check 'offline' scope", 500, "text/plain");
+        await env.TOKENS.put("rt:" + clientId, tok.refresh_token);
+        return cors(env, `<html><body style="font-family:sans-serif;background:#0A0E18;color:#F4F4F5;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center">
+          <div><h2 style="color:#A8C4E0">✓ WHOOP connected</h2><p>You can close this window.<br>Your trainer's Spotter app can now sync your recovery data.</p></div>
+        </body></html>`, 200, "text/html");
+      }
+
+      if (url.pathname === "/sync") {
+        const clientId = url.searchParams.get("client");
+        const key = url.searchParams.get("key");
+        if (!clientId) return cors(env, JSON.stringify({ error: "missing client" }), 400);
+        if (!env.APP_KEY || key !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        const access = await freshAccessToken(env, clientId);
+        if (!access) return cors(env, JSON.stringify({ error: "not_connected" }), 404);
+        const since = new Date(Date.now() - 14 * 86400000).toISOString();
+        const [recovery, sleep] = await Promise.all([
+          whoopGet(access, "/v2/recovery?limit=25&start=" + encodeURIComponent(since)),
+          whoopGet(access, "/v2/activity/sleep?limit=25&start=" + encodeURIComponent(since)),
+        ]);
+        return cors(env, JSON.stringify({ recovery: recovery.records || [], sleep: sleep.records || [] }));
+      }
+
+      /* ---- client self-logged sessions ---- */
+      if (url.pathname === "/submit" && request.method === "POST") {
+        const clientId = url.searchParams.get("c");
+        if (!clientId) return cors(env, JSON.stringify({ error: "missing c" }), 400);
+        const okc = await clientByToken(env, clientId, url.searchParams.get("t"));
+        if (!okc) return cors(env, JSON.stringify({ error: "bad token" }), 403);
+        let body;
+        try { body = await request.json(); } catch { return cors(env, JSON.stringify({ error: "bad json" }), 400); }
+        const text = String(body.text || "").slice(0, 4000).trim();
+        if (!text) return cors(env, JSON.stringify({ error: "empty" }), 400);
+        const rec = {
+          client: clientId,
+          kind: ["recovery","photo","paincheck"].includes(body.kind) ? body.kind : "session",
+          date: String(body.date || "").slice(0, 10),
+          title: String(body.title || "").slice(0, 80),
+          text,
+          submitted: new Date().toISOString(),
+        };
+        const key = "sub:" + clientId + ":" + Date.now() + ":" + crypto.randomUUID().slice(0, 8);
+        await env.TOKENS.put(key, JSON.stringify(rec), { expirationTtl: 60 * 86400 });
+        return cors(env, JSON.stringify({ ok: true }));
+      }
+
+      if (url.pathname === "/pending") {
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        const list = await env.TOKENS.list({ prefix: "sub:" });
+        const out = [];
+        for (const k of list.keys) {
+          const v = await env.TOKENS.get(k.name);
+          if (v) { try { out.push({ id: k.name, ...JSON.parse(v) }); } catch {} }
+        }
+        out.sort((a, b) => (a.submitted || "").localeCompare(b.submitted || ""));
+        return cors(env, JSON.stringify({ pending: out }));
+      }
+
+      if (url.pathname === "/ack" && request.method === "POST") {
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        const id = url.searchParams.get("id");
+        if (!id || !id.startsWith("sub:")) return cors(env, JSON.stringify({ error: "bad id" }), 400);
+        await env.TOKENS.delete(id);
+        return cors(env, JSON.stringify({ ok: true }));
+      }
+
+      /* ---- shared custom-exercise library (trainer pushes, log pages read) ---- */
+      if (url.pathname === "/exlib" && request.method === "POST") {
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        let body;
+        try { body = await request.json(); } catch { return cors(env, JSON.stringify({ error: "bad json" }), 400); }
+        await env.TOKENS.put("exlib", JSON.stringify(body.exercises || []));
+        return cors(env, JSON.stringify({ ok: true }));
+      }
+      if (url.pathname === "/exlib") {
+        const v = await env.TOKENS.get("exlib");
+        return cors(env, v || "[]");
+      }
+
+      /* ---- cloud backup of full app state ---- */
+      if (url.pathname === "/backup" && request.method === "POST") {
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        let body;
+        try { body = await request.json(); } catch { return cors(env, JSON.stringify({ error: "bad json" }), 400); }
+        if (!body || !body.state || !Array.isArray(body.state.clients)) return cors(env, JSON.stringify({ error: "no state" }), 400);
+        const prev = await env.TOKENS.get("backup:latest");
+        if (prev) await env.TOKENS.put("backup:prev", prev);
+        const payload = JSON.stringify({ saved: body.saved || new Date().toISOString(), state: body.state });
+        await env.TOKENS.put("backup:latest", payload);
+        /* weekly slot: extra restore point that only advances every 7+ days */
+        try {
+          const wk = await env.TOKENS.get("backup:week");
+          const wkSaved = wk ? new Date(JSON.parse(wk).saved) : null;
+          if (!wkSaved || (Date.now() - wkSaved) > 7 * 86400000) await env.TOKENS.put("backup:week", payload);
+        } catch {}
+        return cors(env, JSON.stringify({ ok: true }));
+      }
+      if (url.pathname === "/backup") {
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        const vq = url.searchParams.get("v");
+        const which = vq === "prev" ? "backup:prev" : vq === "week" ? "backup:week" : "backup:latest";
+        const v = await env.TOKENS.get(which);
+        return v ? cors(env, v) : cors(env, JSON.stringify({ error: "none" }), 404);
+      }
+
+      /* ---- client self-view: their own data only, trainer-private fields stripped ---- */
+      if (url.pathname === "/me") {
+        const c = await clientByToken(env, url.searchParams.get("c"), url.searchParams.get("t"));
+        if (!c) return cors(env, JSON.stringify({ error: "bad token" }), 403);
+        const me = {
+          name: c.name,
+          sessions: c.sessions || [],
+          prs: c.prs || [],
+          photoLog: c.photoLog || [],
+          pay: c.pay && c.pay.type === "pack" ? { type: "pack", size: c.pay.size, used: null } : null,
+          recovery: (c.recovery || []).slice(-30),
+          injuries: (c.injuries || []).filter(i => i.status !== "cleared").map(i => ({
+            label: i.label, chronic: !!i.chronic, onset: i.onset, side: i.side || null,
+            checkIns: (i.checkIns || []).slice(-15).map(x => ({ date: x.date, pain: x.pain, best: x.best, worst: x.worst })),
+            tests: (i.tests || []).map(t2 => ({ name: t2.name, unit: t2.unit, target: t2.target, entries: (t2.entries || []).slice(-10) })),
+          })),
+        };
+        const raw = await env.TOKENS.get("backup:latest");
+        let saved = null; try { saved = JSON.parse(raw).saved; } catch {}
+        return cors(env, JSON.stringify({ saved, me }));
+      }
+
+      /* ---- Claude morning assessments (GET-writable for web_fetch compatibility) ---- */
+      if (url.pathname === "/assess-set") {
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        let data;
+        try { data = JSON.parse(url.searchParams.get("data") || "[]"); } catch { return cors(env, JSON.stringify({ error: "bad data" }), 400); }
+        if (!Array.isArray(data)) return cors(env, JSON.stringify({ error: "bad data" }), 400);
+        await env.TOKENS.put("assess", JSON.stringify(data.slice(0, 50)));
+        return cors(env, JSON.stringify({ ok: true, n: data.length }));
+      }
+      if (url.pathname === "/assess") {
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        const v = await env.TOKENS.get("assess");
+        return cors(env, v || "[]");
+      }
+
+      if (url.pathname === "/") return cors(env, "Dwil Spotter worker — OK", 200, "text/plain");
+      return cors(env, "not found", 404, "text/plain");
+    } catch (err) {
+      return cors(env, JSON.stringify({ error: String(err.message || err) }), 500);
+    }
+  },
+};

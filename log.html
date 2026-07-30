@@ -509,12 +509,16 @@ const E = window.Engine;
 const qs = new URLSearchParams(location.search);
 const client = qs.get("c") || "";
 const worker = (qs.get("w") || "").replace(/\/+$/,"");
+const token = qs.get("t") || "";
 let customLib = [];
 const app = document.getElementById("app");
 const crescent = `<svg class="crescent" viewBox="0 0 100 100"><defs><linearGradient id="cg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4D7DB4"/><stop offset="1" stop-color="#A8C4E0"/></linearGradient></defs><path d="M62 8 A46 46 0 0 0 62 92 A54 54 0 0 1 62 8 Z" fill="url(#cg)"/></svg>`;
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const todayISO = () => { const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
 let submitted = false;
+let tab = "log";       /* log | progress */
+let me = null;         /* /me payload */
+let meErr = null;
 let recSent = false;
 let phSent = false;
 let pcSent = false;
@@ -569,6 +573,89 @@ function photoCard(){
   </div>`;
 }
 
+function e1rm(w, r){ return (!r || r <= 1) ? w : Math.round(w * (1 + Math.min(r, 12) / 30)); }
+function repN(r){ const m = String(r??"").match(/\d+/); return m ? +m[0] : 0; }
+function holdS(s){ const m = String(s??"").match(/(\d+(?:\.\d+)?)\s*(min)?/i); return m ? Math.round(+m[1] * (m[2] ? 60 : 1)) : 0; }
+function fmtD(d){ const x = new Date(d + "T00:00:00"); return (x.getMonth()+1) + "/" + x.getDate(); }
+function seriesOf(sessions){
+  const map = {};
+  for (const s of [...sessions].sort((a,b)=>a.date.localeCompare(b.date))){
+    for (const x of (s.exercises||[])){
+      if (x.band) continue;
+      let v = null, unit = "";
+      if (x.hold){ v = x.setDetail && x.setDetail.length ? Math.max(...x.setDetail.map(sd=>holdS(sd.reps)),0) : (x.dur ? Math.round(x.dur*60) : holdS(x.reps)); unit = "s"; }
+      else if (x.dur){ v = x.dur; unit = " min"; }
+      else if (x.dist){ v = parseFloat(x.dist)||null; unit = String(x.dist).toLowerCase().includes("mi") ? " mi" : " km"; }
+      else if (x.bw){ v = x.setDetail && x.setDetail.length ? Math.max(...x.setDetail.map(sd=>repN(sd.reps)),0) : repN(x.reps); unit = " reps"; }
+      else if (x.setDetail && x.setDetail.length){ let best=0; for (const sd of x.setDetail){ if (sd.weight!=null) best=Math.max(best, e1rm(sd.weight, repN(sd.reps))); } if (best) { v=best; unit=" e1RM"; } }
+      else if (x.weight != null){ v = e1rm(x.weight, repN(x.reps)); unit = " e1RM"; }
+      if (v){ (map[x.name] = map[x.name] || { unit, pts: [] }).pts.push({ d: s.date, v }); }
+    }
+  }
+  return map;
+}
+function miniChart(name, ser){
+  const pts = ser.pts.slice(-12);
+  if (pts.length < 2) return "";
+  const W = 300, H = 84, L = 8, R = 8, T = 16, B = 16;
+  let lo = Math.min(...pts.map(p=>p.v)), hi = Math.max(...pts.map(p=>p.v));
+  if (hi === lo){ hi += 1; lo = Math.max(0, lo - 1); }
+  const X = i => L + (W-L-R) * i / (pts.length - 1);
+  const Y = v => T + (H-T-B) * (1 - (v - lo) / (hi - lo));
+  const path = pts.map((p,i)=>`${i?"L":"M"}${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join(" ");
+  const first = pts[0], last = pts[pts.length-1];
+  const delta = Math.round((last.v - first.v) * 10) / 10;
+  return `<div style="background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:10px 12px;margin-bottom:8px">
+    <div style="display:flex;justify-content:space-between;font-size:12px"><b>${esc(name)}</b>
+      <span style="color:${delta>=0?"var(--ok)":"var(--hot)"}">${delta>=0?"+":""}${delta}${esc(ser.unit)}</span></div>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block">
+      <path d="${path}" fill="none" stroke="#4D7DB4" stroke-width="2"/>
+      <circle cx="${X(pts.length-1)}" cy="${Y(last.v)}" r="3.5" fill="#A8C4E0"/>
+      <text x="${L}" y="${H-3}" fill="#8b93a5" font-size="10">${fmtD(first.d)} · ${first.v}${esc(ser.unit)}</text>
+      <text x="${W-R}" y="12" fill="#CFD3DC" font-size="11" font-weight="700" text-anchor="end">${last.v}${esc(ser.unit)} · ${fmtD(last.d)}</text>
+    </svg></div>`;
+}
+function painSpark(cis){
+  const pts = cis.slice(-10).map(x=>x.pain);
+  if (pts.length < 2) return "";
+  return `<svg viewBox="0 0 110 24" style="width:110px;height:24px">${pts.map((p,j)=>{
+    const x = 5 + 100*j/(pts.length-1), y = 21 - 17*p/10;
+    return (j?`<line x1="${5+100*(j-1)/(pts.length-1)}" y1="${21-17*pts[j-1]/10}" x2="${x}" y2="${y}" stroke="#ba68c8" stroke-width="1.5"/>`:"") + `<circle cx="${x}" cy="${y}" r="1.8" fill="#e3c8ec"/>`;
+  }).join("")}</svg>`;
+}
+function progressView(){
+  if (meErr) return `<div class="card"><h1>Progress unavailable</h1><div class="sub">${esc(meErr)}</div></div>`;
+  if (!me) return `<div class="card"><div class="sub">Loading your progress…</div></div>`;
+  const now = Date.now();
+  const last30 = me.sessions.filter(s => (now - new Date(s.date+"T00:00:00")) / 86400000 <= 30);
+  const lastS = me.sessions[0];
+  const series = seriesOf(me.sessions);
+  const names = Object.keys(series).sort((a,b)=>{
+    const pa = series[a].pts, pb = series[b].pts;
+    return pb[pb.length-1].d.localeCompare(pa[pa.length-1].d);
+  }).slice(0, 6);
+  const packUsed = me.pay && me.pay.type === "pack" ? null : null;
+  const prs = [...me.prs].sort((a,b)=>b.date.localeCompare(a.date)).slice(0, 10);
+  const recov = (me.recovery||[]).filter(r=>r.whoop!=null).slice(-14);
+  return `
+  <div class="card"><h1>Your last 30 days</h1>
+    <div class="sub" style="margin-top:6px"><b style="color:var(--ice)">${last30.length}</b> sessions logged${lastS?` · last: ${esc(lastS.title)} on ${fmtD(lastS.date)}`:""}${me.pay&&me.pay.type==="pack"?` · training pack with your coach`:""}</div>
+  </div>
+  ${names.length?`<div class="card"><h1>Lift progress</h1><div class="sub" style="margin-bottom:10px">Your strongest set each session — direction matters more than any single day.</div>${names.map(n=>miniChart(n, series[n])).join("")}</div>`:""}
+  ${prs.length?`<div class="card"><h1>Personal records</h1>${prs.map(p=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)"><span>${esc(p.exercise)}</span><b style="color:var(--ice)">${p.bw?`${p.reps} reps`:p.hold?`${p.secs}s hold`:`${p.weight} lbs`}</b></div>`).join("")}</div>`:""}
+  ${(me.injuries||[]).length?`<div class="card"><h1>Recovery tracking</h1>${me.injuries.map(i=>{
+    const ci = i.checkIns[i.checkIns.length-1];
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--line)"><div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:13px"><b>${esc(i.label)}</b>${ci?`<span style="color:var(--dim)"> · pain ${ci.pain}/10 latest</span>`:""}</div>${painSpark(i.checkIns)}</div>
+    <div style="font-size:11px;color:var(--dim);margin-top:2px">Managed together with your coach — keep the check-ins coming, they steer your programming.</div></div>`;
+  }).join("")}</div>`:""}
+  ${recov.length>2?`<div class="card"><h1>Recovery scores</h1><div class="sub">Last ${recov.length} entries from your tracker.</div>
+    <svg viewBox="0 0 300 70" style="width:100%;display:block;margin-top:6px">${recov.map((r,j)=>{
+      const x = 10 + 280*j/(recov.length-1), y = 62 - 50*r.whoop/100;
+      return (j?`<line x1="${10+280*(j-1)/(recov.length-1)}" y1="${62-50*recov[j-1].whoop/100}" x2="${x}" y2="${y}" stroke="#4D7DB4" stroke-width="1.5"/>`:"") + `<circle cx="${x}" cy="${y}" r="2" fill="#A8C4E0"/>`;
+    }).join("")}</svg></div>`:""}
+  <div class="muted" style="text-align:center;margin-top:4px">Your data is stored securely for coaching purposes only and never shared.<br>Ask ${"Dain"} anytime to see, correct, or delete it.</div>`;
+}
+
 function render(){
   if (submitted){
     app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>
@@ -582,7 +669,16 @@ function render(){
     return;
   }
   const t = (app.querySelector("#t")||{}).value || "";
-  app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>
+  const tabs = `<div style="display:flex;gap:8px;margin-bottom:12px">
+    <button style="flex:1;padding:10px;border-radius:11px;font-size:14px;${tab==="log"?"background:var(--steel);color:#fff":"background:var(--panel);color:var(--muted);border:1px solid var(--line)"}" id="tabLog">Log</button>
+    <button style="flex:1;padding:10px;border-radius:11px;font-size:14px;${tab==="progress"?"background:var(--steel);color:#fff":"background:var(--panel);color:var(--muted);border:1px solid var(--line)"}" id="tabProg">My progress</button></div>`;
+  if (tab === "progress"){
+    app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}${progressView()}`;
+    app.querySelector("#tabLog").addEventListener("click", ()=>{ tab="log"; render(); });
+    app.querySelector("#tabProg").addEventListener("click", ()=>{ tab="progress"; render(); });
+    return;
+  }
+  app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}
     <div class="card"><h1>Log a solo workout</h1>
       <div class="sub">${esc(client)} — type what you did in plain English. Sets, reps, weight, and how hard it felt all help.</div>
       <label>Your workout</label>
@@ -596,6 +692,8 @@ function render(){
     ${recCard()}
     ${photoCard()}
     ${painCard()}`;
+  app.querySelector("#tabLog").addEventListener("click", ()=>{ tab="log"; render(); });
+  app.querySelector("#tabProg").addEventListener("click", ()=>{ tab="progress"; render(); });
   const ta = app.querySelector("#t");
   const pv = app.querySelector("#prev");
   pv.innerHTML = preview(t);
@@ -619,7 +717,7 @@ function send(){
   const date = app.querySelector("#d").value || todayISO();
   const title = app.querySelector("#ti").value.trim();
   const btn = app.querySelector("#send"); btn.disabled = true; btn.textContent = "Sending…";
-  fetch(`${worker}/submit?c=${encodeURIComponent(client)}`, {
+  fetch(`${worker}/submit?c=${encodeURIComponent(client)}&t=${encodeURIComponent(token)}`, {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ date, title, text })
   }).then(r=>r.json()).then(d=>{
@@ -633,7 +731,7 @@ function sendPain(){
   const note = app.querySelector("#pcnote").value.trim();
   const text = `injury check-in — best ${b===""?"?":b}, worst ${w===""?"?":w}, now ${n===""?"?":n}${note?` — ${note}`:""}`;
   const btn = app.querySelector("#sendpc"); btn.disabled = true; btn.textContent = "Sending…";
-  fetch(`${worker}/submit?c=${encodeURIComponent(client)}`, {
+  fetch(`${worker}/submit?c=${encodeURIComponent(client)}&t=${encodeURIComponent(token)}`, {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ kind:"paincheck", date: todayISO(), text })
   }).then(r=>r.json()).then(d=>{
@@ -644,7 +742,7 @@ function sendPain(){
 
 function sendPhoto(){
   const btn = app.querySelector("#sendphoto"); btn.disabled = true; btn.textContent = "Sending…";
-  fetch(`${worker}/submit?c=${encodeURIComponent(client)}`, {
+  fetch(`${worker}/submit?c=${encodeURIComponent(client)}&t=${encodeURIComponent(token)}`, {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ kind:"photo", date: todayISO(), text: "progress photos taken" })
   }).then(r=>r.json()).then(d=>{
@@ -657,7 +755,7 @@ function sendRec(){
   const text = app.querySelector("#rt").value.trim();
   if (!text){ alert("Type your recovery numbers first"); return; }
   const btn = app.querySelector("#sendrec"); btn.disabled = true; btn.textContent = "Sending…";
-  fetch(`${worker}/submit?c=${encodeURIComponent(client)}`, {
+  fetch(`${worker}/submit?c=${encodeURIComponent(client)}&t=${encodeURIComponent(token)}`, {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ kind:"recovery", date: todayISO(), text })
   }).then(r=>r.json()).then(d=>{
@@ -668,6 +766,16 @@ function sendRec(){
 
 if (worker){
   fetch(worker + "/exlib").then(r=>r.json()).then(d=>{ if (Array.isArray(d)) { customLib = d; render(); } }).catch(()=>{});
+  if (client && token){
+    fetch(`${worker}/me?c=${encodeURIComponent(client)}&t=${encodeURIComponent(token)}`)
+      .then(r=>r.json()).then(d=>{
+        if (d && d.me){ me = d.me; }
+        else if (d && d.error === "bad token"){ meErr = "This link is out of date — text your coach for a fresh one."; }
+        if (tab === "progress") render();
+      }).catch(()=>{ meErr = "Couldn't reach the server — check your connection."; if (tab === "progress") render(); });
+  } else if (client && !token){
+    meErr = "This link is out of date — text your coach for a fresh one.";
+  }
 }
 render();
 </script>
