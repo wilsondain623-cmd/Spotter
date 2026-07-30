@@ -850,6 +850,29 @@ const INJURY_REFS = {
   other:        { label:"Other",          g:{ "1":[14,28], "2":[14,28], "3":[14,28] } },
 };
 function activeInjuries(c){ return (c.injuries||[]).filter(i=>i.status!=="cleared"); }
+const RED_FLAGS = [
+  { k:"night",  label:"night/rest pain unrelieved by position" },
+  { k:"neuro",  label:"numbness, tingling or new weakness" },
+  { k:"bb",     label:"bowel/bladder changes" },
+  { k:"wt",     label:"unexplained weight loss" },
+  { k:"fever",  label:"fever / feeling systemically unwell" },
+  { k:"trauma", label:"significant trauma at onset" },
+];
+function rfActive(i){ return Array.isArray(i.redFlags) && i.redFlags.length > 0 && !i.rfCleared; }
+function redFlagBlock(i){
+  if (i.redFlags === undefined)
+    return `<div class="minirow" style="margin-top:6px"><span class="lbl" style="flex:1">Red-flag screen not recorded</span>
+      <button class="btn-sm" data-rfnone="${i.id}">None present ✓</button>
+      <button class="btn-sm" style="color:#e0a8a8" data-rfsome="${i.id}">Flag present…</button></div>`;
+  if (rfActive(i))
+    return `<div style="margin-top:8px;padding:9px 11px;border:1px solid #c95f5f;border-radius:10px;background:#c95f5f18">
+      <div style="font-size:12px;font-weight:800;color:#e0a8a8">⚠ Red flags reported: ${i.redFlags.map(k=>{const f=RED_FLAGS.find(x=>x.k===k);return f?f.label:k;}).join("; ")}</div>
+      <div style="font-size:11px;color:#CFD3DC;margin-top:3px">Refer for medical evaluation before progressing loading. Healing Index is withheld until cleared.</div>
+      <button class="btn2" style="width:100%;margin-top:7px" data-rfclear="${i.id}">Medically evaluated — mark cleared</button></div>`;
+  if (i.redFlags.length && i.rfCleared)
+    return `<div class="muted" style="font-size:10px;margin-top:4px">Red flags reported ${""} — medically evaluated and cleared ${fmtDate(i.rfCleared)}.</div>`;
+  return "";
+}
 function chronicHot(i){ const ci = lastCheckIn(i); if (!ci) return false; const p = ci.worst != null ? ci.worst : ci.pain; return p >= 4 && E.daysBetween(ci.date, todayISO()) <= 7; }
 function ciStr(ci){ return `pain ${ci.pain}/10${ci.worst!=null||ci.best!=null?` (best ${ci.best??"–"} · worst ${ci.worst??"–"}${ci.ctx?` ${ci.ctx==="rest"?"at rest":ci.ctx==="daily"?"in daily life":"under load"}`:""})`:""}${ci.conf!=null?` · confidence ${ci.conf}/10`:""}`; }
 function flaggedInjuries(c){ return activeInjuries(c).filter(i => !i.chronic || chronicHot(i)); }
@@ -1250,7 +1273,9 @@ function tabBrief(c){
     const _a = aiAssessFor(c, i);
     const _s = _a ? _a.score : (_h ? _h.score : null);
     const _pc = progressCall(c, i);
-    const tchip = (_s != null ? ` · <span style="color:${tolColor(_s)}">healing ${_s}${_a?"*":""}</span>` : "") + ` · <span style="color:${callColor(_pc.w)};font-weight:800">${_pc.w}</span>`;
+    const tchip = rfActive(i)
+      ? ` · <span style="color:#c95f5f;font-weight:800">⚠ REFER — red flags</span>`
+      : (_s != null ? ` · <span style="color:${tolColor(_s)}">healing ${_s}${_a?"*":""}</span>` : "") + ` · <span style="color:${callColor(_pc.w)};font-weight:800">${_pc.w}</span>`;
     if (i.chronic) return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">∞ ${esc(i.label)} — chronic${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${tchip}${chronicHot(i)?' · <span style="color:#e0a8a8">flared — keep loading gentle</span>':""}</div>`;
     return `<div style="font-size:13px;color:#e3c8ec;font-weight:700;line-height:1.5">⚠ ${esc(i.label)} — day ${injDay(i)} of ~${i.expLo}–${i.expHi}${ci?` · ${ciStr(ci)} (${fmtDate(ci.date)})`:" · no check-ins yet"}${tchip}</div>`;
   }).join("")}</div>` : "";
@@ -1623,7 +1648,7 @@ const PHASE_CAPS = {
 };
 function phaseCap(inj){
   if (inj.chronic) return null;
-  const caps = (PHASE_CAPS[inj.type]||{})[inj.grade||"1"];
+  const caps = (PHASE_CAPS[inj.type]||{})[inj.grade] || (PHASE_CAPS[inj.type]||{})["2"]; /* unclassified → conservative g2 caps */
   if (!caps) return null;
   const day = injDay(inj);
   for (const [until, cap] of caps) if (day <= until) return cap;
@@ -1647,11 +1672,12 @@ function bandExposures(c, inj){
 }
 /* advisory only — the on-the-floor call, derived from the symptom-response rule */
 function progressCall(c, inj){
+  if (rfActive(inj)) return { w: "hold", why: "red flags reported — medical evaluation before loading decisions" };
   const cis = inj.checkIns || [];
   const last = cis[cis.length - 1];
   if (cis.length >= 2){
     const a = cis[cis.length - 2], b = last;
-    if (dGap(b.date, todayISO()) <= 3 && (b.pain > a.pain + 1 || (b.worst != null ? b.worst : b.pain) > (a.worst != null ? a.worst : a.pain) + 1))
+    if (dGap(b.date, todayISO()) <= 3 && ((b.pain - a.pain) >= 2 || ((b.worst != null ? b.worst : b.pain) - (a.worst != null ? a.worst : a.pain)) >= 2))
       return { w: "regress", why: "symptoms spiked after recent loading — step back and re-test lighter" };
   }
   if (last && last.ctx === "rest" && last.pain >= 3 && injDay(inj) > 14)
@@ -1684,7 +1710,7 @@ function flaredAfter(inj, dateISO){
   if (!post) return false; /* no data = neutral, never a penalty */
   const pv = prev ? prev.pain : null, pw = prev ? (prev.worst != null ? prev.worst : prev.pain) : null;
   const cv = post.pain, cw = post.worst != null ? post.worst : post.pain;
-  if (prev) return cv > pv + 1 || cw > pw + 1;
+  if (prev) return (cv - pv) >= 2 || (cw - pw) >= 2; /* MCID for NPRS ≈ 2 — smaller shifts are noise */
   return cw >= 5;
 }
 
@@ -1714,7 +1740,10 @@ function healingIndex(c, inj){
   }
   const ci = lastCheckIn(inj);
   if (ci){
-    const cur = ci.pain, worst = ci.worst != null ? ci.worst : cur;
+    const recent = (inj.checkIns || []).slice(-3);
+    const med = arr => { const s = [...arr].sort((a,b)=>a-b); return s[Math.floor(s.length/2)]; };
+    const cur = med(recent.map(x=>x.pain));
+    const worst = Math.max(cur, med(recent.map(x=>x.worst != null ? x.worst : x.pain)));
     let p = 100 - cur*10 - (worst-cur)*3;
     const avg = a => a.length ? a.reduce((s,v)=>s+v,0)/a.length : null;
     const a30 = avg((inj.checkIns||[]).filter(x=>E.daysBetween(x.date,todayISO())<=30).map(x=>x.pain));
@@ -1741,6 +1770,7 @@ function aiAssessFor(c, i){
   return a;
 }
 function healingBar(c, i){
+  if (rfActive(i)) return ""; /* index withheld — redFlagBlock carries the message */
   const h = healingIndex(c, i);
   const a = aiAssessFor(c, i);
   if (!h && !a) return "";
@@ -1749,8 +1779,8 @@ function healingBar(c, i){
   const word = score >= 90 ? "well healed / near capacity" : score >= 70 ? "progressing" : "early / guarded";
   return `<div style="margin-top:8px">
     <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">
-      <span style="font-weight:800;color:${col}">Healing Index ${score} <span style="color:#8b93a5;font-weight:400">· ${word}${a&&h&&a.score!==h.score?` · Claude-adjusted (formula ${h.score})`:a?" · Claude-adjusted":""}</span></span>
-      ${h?`<span style="color:#8b93a5">${h.parts.map(p=>`${p.k} ${p.v}`).join(" · ")} · ${h.profile} weights</span>`:""}</div>
+      <span style="font-weight:800;color:${col}">Healing Index ${(h&&h.parts.length===1&&!a)?"~":""}${score} <span style="color:#8b93a5;font-weight:400">· ${word}${a&&h&&a.score!==h.score?` · Claude-adjusted (formula ${h.score})`:a?" · Claude-adjusted":""}</span></span>
+      ${h?`<span style="color:#8b93a5">${h.parts.map(p=>`${p.k} ${p.v}`).join(" · ")} · ${h.profile} weights · ${h.parts.length===1?`<span style="color:#d4a04d">thin data — ${h.parts[0].k} only</span>`:`${h.parts.length} data streams`}</span>`:""}</div>
     <div class="bar-track"><div class="bar-fill" style="width:${score}%;background:linear-gradient(90deg,${col}88,${col})"></div></div>
     ${h&&h.capped?`<div class="muted" style="font-size:10px;margin-top:3px;color:#d4a04d">Capped at ${h.cap} by tissue timeline (day ${injDay(i)}) — numbers can look better than biology allows.</div>`:""}
     ${h&&h.flags&&h.flags.length?h.flags.map(f=>`<div style="font-size:10px;margin-top:3px;color:#e0a8a8">⚠ ${f}</div>`).join(""):""}
@@ -1934,10 +1964,11 @@ function recTrendChart(c){
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block;margin-top:8px">${out}</svg>`;
 }
 
-let injForm = { type:"strain", grade:"1", chronic:false, label:"", onset:null, lo:null, hi:null, side:null };
+let injForm = { type:"strain", grade:"?", chronic:false, label:"", onset:null, lo:null, hi:null, side:null };
 let injSel = {};
+let injScreen = {};
 
-function injRefDays(){ const r = INJURY_REFS[injForm.type]||INJURY_REFS.other; return r.g[injForm.grade]||r.g["1"]; }
+function injRefDays(){ const r = INJURY_REFS[injForm.type]||INJURY_REFS.other; return r.g[injForm.grade]||r.g["2"]||r.g["1"]; /* unclassified → conservative */ }
 
 function tabInjuries(c){
   const act = activeInjuries(c);
@@ -1960,6 +1991,7 @@ function tabInjuries(c){
           <div class="d-name" style="color:#e3c8ec">∞ ${esc(i.label)} <span style="font-size:11px;color:#8b93a5;font-weight:400">chronic</span></div>
           <div class="d-meta">${(i.muscles||[]).join(", ")} · tracking since ${fmtDate(i.onset)}</div>
         </div><button class="btn-x" data-injdel="${i.id}">✕</button></div>
+        ${redFlagBlock(i)}
         ${healingBar(c, i)}
         <div class="row" style="margin-top:8px;gap:8px">
           <div class="grow">${ci?`<span style="font-size:12px;color:#CFD3DC">Last check-in ${fmtDate(ci.date)} · ${ciStr(ci)}${ci.note?" · "+esc(ci.note):""}</span>`:`<span style="font-size:12px;color:#8b93a5">No check-ins yet</span>`}
@@ -2002,8 +2034,9 @@ function tabInjuries(c){
     return `<div class="card" style="border-color:${INJ_COLOR}66">
       <div class="row"><div class="grow">
         <div class="d-name" style="color:#e3c8ec">⚠ ${esc(i.label)}</div>
-        <div class="d-meta">${(i.muscles||[]).join(", ")} · onset ${fmtDate(i.onset)} · ${INJURY_REFS[i.type]?INJURY_REFS[i.type].label:i.type}${i.grade!=="1"||i.type==="strain"||i.type==="sprain"?" grade "+i.grade:""}</div>
+        <div class="d-meta">${(i.muscles||[]).join(", ")} · onset ${fmtDate(i.onset)} · ${INJURY_REFS[i.type]?INJURY_REFS[i.type].label:i.type}${["2","3"].includes(i.grade)||(i.grade==="1"&&(i.type==="strain"||i.type==="sprain"))?" grade "+i.grade:""}</div>
       </div><button class="btn-x" data-injdel="${i.id}">✕</button></div>
+      ${redFlagBlock(i)}
       ${healingBar(c, i)}
       <div style="margin-top:8px">
         <div style="display:flex;justify-content:space-between;font-size:11px;color:#8b93a5">
@@ -2042,7 +2075,7 @@ function tabInjuries(c){
   const lo = injForm.lo ?? aLo, hi = injForm.hi ?? aHi;
   const grid = E.MUSCLES.map(m=>`<div class="mg ${injSel[m]?"p":""}" data-injmus="${m}">${m}</div>`).join("");
   const typeOpts = Object.keys(INJURY_REFS).map(k=>`<option value="${k}" ${injForm.type===k?"selected":""}>${INJURY_REFS[k].label}</option>`).join("");
-  const gradeChips = ["1","2","3"].map(g=>`<span class="ichip ${injForm.grade===g?"on":""}" data-injgrade="${g}">grade ${g}</span>`).join("");
+  const gradeChips = ["?","1","2","3"].map(g=>`<span class="ichip ${injForm.grade===g?"on":""}" data-injgrade="${g}">${g==="?"?"unclassified":"grade "+g}</span>`).join("");
   const clearedHtml = cleared.length ? `<h2>History</h2>` + cleared.map(i=>
     `<div class="note">⚠ ${esc(i.label)} (${(i.muscles||[]).join(", ")}) · ${fmtDate(i.onset)} → cleared ${fmtDate(i.clearedDate)} <button class="btn-x" data-injdel="${i.id}" style="float:right;margin-top:-4px">✕</button></div>`).join("") : "";
 
@@ -2054,6 +2087,8 @@ function tabInjuries(c){
       <span class="ichip ${injForm.side==="L"?"on":""}" data-injside="L">left side</span>
       <span class="ichip ${injForm.side==="R"?"on":""}" data-injside="R">right side</span></div>
     ${injForm.side?`<div class="muted" style="font-size:11px;margin:4px 0">One-sided injury — load tolerance will compare ${injForm.side==="L"?"left":"right"}-side lifts against the other side (limb symmetry).</div>`:""}
+    <div class="muted" style="margin:8px 0 4px;font-size:11px">Screening — any of these present? (tap; leave blank if none)</div>
+    <div class="ichips">${RED_FLAGS.map(f=>`<span class="ichip ${injScreen[f.k]?"on":""}" data-injflag="${f.k}" style="${injScreen[f.k]?"border-color:#c95f5f;color:#e0a8a8":""}">${f.label}</span>`).join("")}</div>
     <div class="muted" style="margin:8px 0 4px;font-size:11px">Affected muscle groups (tap):</div>
     <div class="mgrid">${grid}</div>
     <div class="minirow"><span class="lbl">Onset</span><input type="date" id="injonset" value="${injForm.onset||todayISO()}"></div>
@@ -2622,7 +2657,7 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injflag],[data-rfnone],[data-rfsome],[data-rfclear],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
@@ -2634,6 +2669,18 @@ function bind(){
     else if (ds.injgrade){ injForm.grade = ds.injgrade; injForm.lo = null; injForm.hi = null; render(); }
     else if (ds.injchronic){ injForm.chronic = !injForm.chronic; render(); }
     else if (ds.injside){ injForm.side = injForm.side === ds.injside ? null : ds.injside; render(); }
+    else if (ds.injflag){ injScreen[ds.injflag] = !injScreen[ds.injflag]; if (!injScreen[ds.injflag]) delete injScreen[ds.injflag]; render(); }
+    else if (ds.rfnone){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.rfnone); if(!inj) return;
+      inj.redFlags = []; save(); render(); toast("Screen recorded — none present"); }
+    else if (ds.rfsome){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.rfsome); if(!inj) return;
+      const pick = prompt("Which flags? Enter numbers, comma-separated:\n" + RED_FLAGS.map((f,n)=>`${n+1}) ${f.label}`).join("\n"));
+      if (pick === null) return;
+      const ks = pick.split(/[,\s]+/).map(x=>RED_FLAGS[parseInt(x,10)-1]).filter(Boolean).map(f=>f.k);
+      if (!ks.length){ toast("No valid selections"); return; }
+      inj.redFlags = ks; delete inj.rfCleared; save(); render(); toast("Red flags recorded — refer for medical evaluation"); }
+    else if (ds.rfclear){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.rfclear); if(!inj) return;
+      if (confirm("Confirm: this has been medically evaluated and cleared for continued training?")){
+        inj.rfCleared = todayISO(); save(); render(); toast("Marked medically cleared — index restored"); } }
     else if (ds.testlog){ const [iid, ti] = ds.testlog.split(":"); const c=client(); const inj=c.injuries.find(x=>x.id===iid); if(!inj) return;
       const t = (inj.tests||[])[+ti]; if (!t) return;
       const v = $("#tv-"+iid+"-"+ti).value; if (v===""){ toast("Enter a value first"); return; }
@@ -2760,18 +2807,19 @@ function bind(){
         const onset = $("#injonset").value || injForm.onset || todayISO();
         const wasChronic = injForm.chronic;
         c.injuries = c.injuries||[];
+        const rf = Object.keys(injScreen);
         if (injForm.chronic){
           c.injuries.push({ id:"inj"+Date.now(), label, type:injForm.type, grade:injForm.grade, chronic:true,
-            ...(injForm.side?{side:injForm.side}:{}), muscles, onset, status:"active", checkIns:[] });
+            ...(injForm.side?{side:injForm.side}:{}), redFlags: rf, muscles, onset, status:"active", checkIns:[] });
         } else {
           const [aLo2, aHi2] = injRefDays();
           const lo = +($("#injlo").value) || injForm.lo || aLo2, hi = +($("#injhi").value) || injForm.hi || aHi2;
           c.injuries.push({ id:"inj"+Date.now(), label, type:injForm.type, grade:injForm.grade,
-            ...(injForm.side?{side:injForm.side}:{}), muscles, onset, expLo:Math.min(lo,hi), expHi:Math.max(lo,hi),
+            ...(injForm.side?{side:injForm.side}:{}), redFlags: rf, muscles, onset, expLo:Math.min(lo,hi), expHi:Math.max(lo,hi),
             status:"active", checkIns:[] });
         }
-        injSel={}; injForm = { type:"strain", grade:"1", chronic:false, label:"", onset:null, lo:null, hi:null, side:null };
-        save(); render(); toast(wasChronic?`${label} logged — chronic tracking is on`:`${label} logged — it now shows on the body map and brief`); }
+        injSel={}; injScreen={}; injForm = { type:"strain", grade:"?", chronic:false, label:"", onset:null, lo:null, hi:null, side:null };
+        save(); render(); toast(rf.length?`${label} logged with RED FLAGS — refer for medical evaluation`:wasChronic?`${label} logged — chronic tracking is on`:`${label} logged — it now shows on the body map and brief`); }
       else if (a==="whoop-link"){ const l = whoopConnectLink(client());
         if (l && typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Connect link copied — text it to the client")).catch(()=>prompt("Send this link to the client:", l));
         else if (l) prompt("Send this link to the client:", l); }
