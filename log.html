@@ -344,6 +344,21 @@ function parseSession(text, customLib) {
   const parsed = [], unmatched = [];
   let last = null; /* most recent item (parsed or unmatched) for pyramid continuation */
   const sideOf = s => /\b(left|l)\b/i.test(s) ? "L" : /\b(right|r)\b/i.test(s) ? "R" : null;
+  const timeList = s => [...s.matchAll(/(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds|min|mins|minutes)\b/gi)]
+    .map(m => ({ n: +m[1], sec: /^s/i.test(m[2]) && !/^min/i.test(m[2]) }));
+  const boutify = (item, list) => { /* interval cardio: several timed bouts in one exercise */
+    const mins = list.map(t => t.sec ? t.n / 60 : t.n);
+    item.bouts = mins.map(m => Math.round(m * 10) / 10);
+    item.dur = Math.round(mins.reduce((a, b) => a + b, 0) * 10) / 10;
+    item.sets = Math.max(1, Math.min(6, Math.round(item.dur / 10)));
+    item.reps = item.bouts.join("+") + "min";
+  };
+  const holdify = (item, list) => { /* varying holds: per-set times via setDetail */
+    item.setDetail = list.map(t => ({ reps: t.sec ? `${t.n}s` : `${t.n}min`, weight: null }));
+    item.sets = list.length;
+    item.reps = item.setDetail.map(x => x.reps).join("/");
+    item.weight = null;
+  };
   const appendTokens = (item, tokens) => {
     if (!item.setDetail) {
       item.setDetail = [];
@@ -371,16 +386,33 @@ function parseSession(text, customLib) {
       const sd_ = sideOf(seg);
       if (sd_){ base.side = sd_; base.name = ex.name + " (" + sd_ + ")"; }
       let item;
+      const tl = timeList(seg);
       if (tokens.length) {
         item = { ...base, setDetail: tokens, sets: tokens.length,
           reps: tokens.map(t => t.reps).join("/"), weight: maxWeight(tokens) };
+      } else if (base.hold && tl.length && (!sr || tl.length > 1)) {
+        item = { ...base };
+        holdify(item, tl);
       } else if (sr) {
         item = { ...base, sets: sr.sets, reps: sr.reps, weight: parseWeight(seg),
           ...(sr.dur ? { dur: sr.dur } : {}), ...(sr.dist ? { dist: sr.dist } : {}) };
+        if (item.dur && tl.length > 1) boutify(item, tl); /* interval cardio in one breath */
       } else {
         item = { ...base, sets: 3, reps: "", weight: parseWeight(seg), assumedSets: true };
       }
       parsed.push(item); last = item;
+    } else if (last && (last.hold || last.dur) && /^\s*(?:and\s+)?\d+(?:\.\d+)?\s*(s|sec|secs|seconds|min|mins|minutes)\s*$/i.test(seg)) {
+      const t = timeList(seg)[0];
+      if (last.hold) {
+        if (!last.setDetail) last.setDetail = (last.sets && last.reps) ? Array.from({length:last.sets}, () => ({ reps: last.reps, weight: null })) : [];
+        last.setDetail.push({ reps: t.sec ? `${t.n}s` : `${t.n}min`, weight: null });
+        last.sets = last.setDetail.length;
+        last.reps = last.setDetail.map(x => x.reps).join("/");
+      } else {
+        const list = (last.bouts || [last.dur]).map(m => ({ n: m, sec: false }));
+        list.push(t);
+        boutify(last, list);
+      }
     } else if (tokens.length && !sr && last) {
       const segSide = sideOf(seg);
       if (segSide && last.side && segSide !== last.side) {
@@ -396,11 +428,16 @@ function parseSession(text, customLib) {
         /* bare weight×reps segment: continuation of previous exercise (pyramid sets) */
         appendTokens(last, tokens);
       }
-    } else if (sr || tokens.length) {
+    } else if (sr || tokens.length || (/\b(iso(metric)?|hold)\b/i.test(seg) && timeList(seg).length)) {
       const item = { raw: seg, sets: sr ? sr.sets : tokens.length, reps: sr ? sr.reps : tokens.map(t=>t.reps).join("/"),
         weight: tokens.length ? maxWeight(tokens) : parseWeight(seg),
         setDetail: tokens.length ? tokens : undefined, intensity: detectIntensity(seg) };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) item.bw = true;
+      if (/\b(iso(metric)?|hold)\b/i.test(seg)){
+        item.hold = true;
+        const tl2 = timeList(seg);
+        if (tl2.length && !tokens.length) holdify(item, tl2);
+      }
       if (/\bband(s|ed)?\b/i.test(seg)){
         const cm = seg.match(/\b(red|blue|green|black|purple|orange|yellow|gr[ae]y|white|pink|teal|tan|gold|silver)\b/i);
         item.band = cm ? cm[1].toLowerCase() : "band";
@@ -486,7 +523,7 @@ function preview(text){
   if (!text.trim()) return "";
   const { parsed, unmatched } = E.parseSession(text, customLib);
   if (!parsed.length && !unmatched.length) return `<div class="muted" style="margin-top:10px">Nothing recognized yet — try "bench 4x8 at 185, incline press 3x10".</div>`;
-  const rows = parsed.map(p=>`<div class="pex"><div class="n">${esc(p.name)}</div><div class="m">${p.setDetail?p.setDetail.map(s=>`${s.weight??"–"}×${s.reps||"?"}${s.intensity?" "+s.intensity:""}`).join(", "):`${p.sets}×${p.reps||"?"}${p.weight?" @ "+p.weight:""}`} · ${p.intensity}</div></div>`).join("");
+  const rows = parsed.map(p=>`<div class="pex"><div class="n">${esc(p.name)}</div><div class="m">${p.setDetail?p.setDetail.map(s=>`${s.weight!=null?s.weight+"×":""}${s.reps||"?"}${s.intensity?" "+s.intensity:""}`).join(", "):`${p.sets}×${p.reps||"?"}${p.weight?" @ "+p.weight:""}`} · ${p.intensity}</div></div>`).join("");
   const unk = unmatched.map(u=>`<div class="pex unk"><div class="n">? ${esc(u.raw)}</div><div class="m">your coach will sort this one out</div></div>`).join("");
   return `<div class="prev"><div class="muted" style="margin-bottom:6px">Preview — this is what your coach receives:</div>${rows}${unk}</div>`;
 }
