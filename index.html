@@ -184,6 +184,19 @@ const EXERCISE_LIBRARY = [
   { name: "Side Plank", aliases: ["side plank","side planks","side plank raise","side plank raises"], p: ["core"], s: ["abductors"], hold: true },
   { name: "Wall Sit", aliases: ["wall sit","wall sits","wall-sit"], p: ["quads"], s: ["glutes"], hold: true },
   { name: "Band Pull-Apart", aliases: ["band pull apart","band pull aparts","band pull-aparts","pull aparts"], p: ["rear-delts"], s: ["mid-back"] },
+  { name: "Basketball", aliases: ["basketball","hoops","pickup basketball","bball"], p: ["quads","calves"], s: ["hamstrings","glutes","core","adductors","abductors"], sys: 1.7 },
+  { name: "Soccer", aliases: ["soccer","futbol"], p: ["quads","calves","hamstrings"], s: ["glutes","core","adductors"], sys: 1.8 },
+  { name: "Tennis", aliases: ["tennis"], p: ["quads","calves"], s: ["core","front-delts","forearms-grip","glutes"], sys: 1.5 },
+  { name: "Pickleball", aliases: ["pickleball","padel"], p: ["quads","calves"], s: ["core","forearms-grip"], sys: 1.4 },
+  { name: "Volleyball", aliases: ["volleyball"], p: ["quads","calves"], s: ["front-delts","core","glutes"], sys: 1.5 },
+  { name: "Swimming", aliases: ["swimming","swim","swam","laps"], p: ["lats","front-delts"], s: ["mid-back","core","triceps","quads"], sys: 1.5 },
+  { name: "Hiking", aliases: ["hike","hiking","hiked"], p: ["quads","calves","glutes"], s: ["hamstrings","core"], sys: 1.4 },
+  { name: "Boxing", aliases: ["boxing","kickboxing","muay thai","sparring"], p: ["front-delts","core"], s: ["triceps","chest","calves","quads"], sys: 1.7 },
+  { name: "Golf", aliases: ["golf","golfing","golfed"], p: ["core"], s: ["forearms-grip","glutes","low-back"], sys: 1.1 },
+  { name: "Surfing", aliases: ["surf","surfing","surfed"], p: ["lats","front-delts"], s: ["core","mid-back"], sys: 1.4 },
+  { name: "Skiing", aliases: ["skiing","snowboarding","skied"], p: ["quads","glutes"], s: ["core","calves","adductors"], sys: 1.6 },
+  { name: "Flag Football", aliases: ["flag football","football"], p: ["quads","calves","hamstrings"], s: ["glutes","core"], sys: 1.7 },
+  { name: "Sport (general)", aliases: ["sport","pickup game","rec league","scrimmage","league game"], p: ["quads","calves"], s: ["core","glutes"], sys: 1.5 },
   { name: "Dead Hang", aliases: ["dead hang","dead hangs","bar hang"], p: ["forearms-grip"], s: ["lats"], hold: true },
   { name: "Ab Crunch", aliases: ["ab crunch","crunch","crunches","cable ab crunch","cable crunch"], p: ["core"], s: [] },
   { name: "Leg Lift", aliases: ["leg lift","leg lifts","leg raise","leg raises","leg lift holds with crunches","leg lift hold"], p: ["core"], s: [] },
@@ -339,6 +352,16 @@ function parseSetsReps(seg) {
   let m;
   if ((m = seg.match(/\b(\d{1,2})\s*(?:[x×]|by)\s*(\d+)(?:\s*[-–]\s*(\d+))?\s*(s|sec|seconds)?\b/i)) && +m[1] < 20) {
     return { sets: +m[1], reps: m[4] ? m[2] + "s" : (m[3] ? `${m[2]}-${m[3]}` : m[2]) };
+  }
+  if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hours?)\b/i))) {
+    const mins = Math.round(+m[1] * 60);
+    return { sets: Math.max(1, Math.min(6, Math.round(mins / 10))), reps: `${mins}min`, dur: mins };
+  }
+  if (/\ban?\s+hour\b/i.test(seg)) {
+    return { sets: 6, reps: "60min", dur: 60 };
+  }
+  if (/\bhalf\s+(?:an\s+)?hour\b/i.test(seg)) {
+    return { sets: 3, reps: "30min", dur: 30 };
   }
   if ((m = seg.match(/(\d+(?:\.\d+)?)\s*(?:min|mins|minutes)\b/i))) {
     const mins = +m[1];
