@@ -14,6 +14,10 @@
      Scopes: read:recovery read:sleep read:cycles read:profile offline
    ============================================================ */
 
+/* v7: + /video endpoints — R2 bucket binding VIDEOS required.
+   Movement-quality videos: upload (client token or trainer key), Range-aware
+   playback, per-movement milestone retention (baseline + pinned + latest 4). */
+
 const WHOOP_AUTH = "https://api.prod.whoop.com/oauth/oauth2/auth";
 const WHOOP_TOKEN = "https://api.prod.whoop.com/oauth/oauth2/token";
 const WHOOP_API = "https://api.prod.whoop.com/developer";
@@ -66,6 +70,52 @@ async function clientByToken(env, id, t) {
   if (!state || !Array.isArray(state.clients)) return null;
   const c = state.clients.find(x => x.id === id);
   return (c && c.token && c.token === t) ? c : null;
+}
+
+/* ---- movement-video index (KV) + retention ---- */
+async function vindex(env, c) {
+  try { return JSON.parse(await env.TOKENS.get("vidx:" + c) || "[]"); } catch { return []; }
+}
+async function vsave(env, c, list) { await env.TOKENS.put("vidx:" + c, JSON.stringify(list)); }
+/* keep per movement: earliest (baseline) + pinned milestones + latest 4; delete the middle */
+async function vtrim(env, c, list, mv) {
+  const grp = list.filter(v => v.mv === mv).sort((a, b) => String(a.date || a.up).localeCompare(String(b.date || b.up)));
+  if (grp.length <= 5) return list;
+  const keep = new Set([grp[0].k]);
+  grp.forEach(v => { if (v.ms) keep.add(v.k); });
+  grp.slice(-4).forEach(v => keep.add(v.k));
+  const drop = grp.filter(v => !keep.has(v.k));
+  for (const d of drop) { try { await env.VIDEOS.delete(d.k); } catch {} }
+  const dset = new Set(drop.map(d => d.k));
+  return list.filter(v => !dset.has(v.k));
+}
+async function serveVideo(env, key, request) {
+  const head = await env.VIDEOS.head(key);
+  if (!head) return cors(env, JSON.stringify({ error: "not found" }), 404);
+  const total = head.size;
+  const ct = (head.httpMetadata && head.httpMetadata.contentType) || "video/mp4";
+  const base = {
+    "Accept-Ranges": "bytes", "Content-Type": ct,
+    "Access-Control-Allow-Origin": env.ALLOWED_ORIGIN || "*",
+    "Cache-Control": "private, max-age=3600",
+  };
+  const range = request.headers.get("Range");
+  if (range) {
+    const m = /bytes=(\d*)-(\d*)/.exec(range);
+    const start = m && m[1] ? parseInt(m[1], 10) : 0;
+    const end = m && m[2] ? Math.min(parseInt(m[2], 10), total - 1) : total - 1;
+    if (start >= total || start > end)
+      return new Response(null, { status: 416, headers: { ...base, "Content-Range": "bytes */" + total } });
+    const obj = await env.VIDEOS.get(key, { range: { offset: start, length: end - start + 1 } });
+    if (!obj) return cors(env, JSON.stringify({ error: "not found" }), 404);
+    return new Response(obj.body, { status: 206, headers: {
+      ...base, "Content-Range": "bytes " + start + "-" + end + "/" + total,
+      "Content-Length": String(end - start + 1),
+    }});
+  }
+  const obj = await env.VIDEOS.get(key);
+  if (!obj) return cors(env, JSON.stringify({ error: "not found" }), 404);
+  return new Response(obj.body, { status: 200, headers: { ...base, "Content-Length": String(total) } });
 }
 
 export default {
@@ -249,6 +299,88 @@ export default {
         if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
         const v = await env.TOKENS.get("assess");
         return cors(env, v || "[]");
+      }
+
+      /* ---- movement-quality videos (R2) ---- */
+      if (url.pathname === "/video" && request.method === "POST") {
+        if (!env.VIDEOS) return cors(env, JSON.stringify({ error: "no video storage bound" }), 500);
+        const c = url.searchParams.get("c");
+        if (!c) return cors(env, JSON.stringify({ error: "missing c" }), 400);
+        const isTrainer = env.APP_KEY && url.searchParams.get("key") === env.APP_KEY;
+        let by = "trainer";
+        if (!isTrainer) {
+          const okc = await clientByToken(env, c, url.searchParams.get("t"));
+          if (!okc) return cors(env, JSON.stringify({ error: "bad token" }), 403);
+          by = "client";
+        }
+        const mv = (url.searchParams.get("mv") || "movement").slice(0, 40).toLowerCase()
+          .replace(/[^a-z0-9 _-]/g, "").trim() || "movement";
+        const side = (url.searchParams.get("side") || "").slice(0, 1).toUpperCase();
+        const date = (url.searchParams.get("date") || new Date().toISOString().slice(0, 10)).slice(0, 10);
+        const note = (url.searchParams.get("note") || "").slice(0, 300);
+        const len = parseInt(request.headers.get("Content-Length") || "0", 10);
+        if (!len) return cors(env, JSON.stringify({ error: "length required" }), 411);
+        if (len > 95 * 1024 * 1024) return cors(env, JSON.stringify({ error: "too large — 95MB max, trim the clip" }), 413);
+        const ct = request.headers.get("Content-Type") || "video/mp4";
+        if (!/^video\//.test(ct)) return cors(env, JSON.stringify({ error: "not a video" }), 415);
+        const ext = ct.includes("webm") ? "webm" : ct.includes("quicktime") ? "mov" : "mp4";
+        const key = "v/" + c + "/" + mv.replace(/\s+/g, "-") + "/" + Date.now() + "-" + crypto.randomUUID().slice(0, 6) + "." + ext;
+        await env.VIDEOS.put(key, request.body, { httpMetadata: { contentType: ct } });
+        let list = await vindex(env, c);
+        list.push({ k: key, mv, side, date, note, by, ms: 0, size: len, ct, up: new Date().toISOString() });
+        list = await vtrim(env, c, list, mv);
+        await vsave(env, c, list);
+        if (by === "client") {
+          const rec = { client: c, kind: "video", date, title: mv + (side ? " (" + side + ")" : ""),
+            text: note || "(movement check video)", vkey: key, submitted: new Date().toISOString() };
+          await env.TOKENS.put("sub:" + c + ":" + Date.now() + ":" + crypto.randomUUID().slice(0, 8),
+            JSON.stringify(rec), { expirationTtl: 60 * 86400 });
+        }
+        return cors(env, JSON.stringify({ ok: true, key }));
+      }
+      if (url.pathname === "/video") {
+        if (!env.VIDEOS) return cors(env, JSON.stringify({ error: "no video storage bound" }), 500);
+        const k = url.searchParams.get("k") || "";
+        if (!k.startsWith("v/")) return cors(env, JSON.stringify({ error: "bad key" }), 400);
+        const isTrainer = env.APP_KEY && url.searchParams.get("key") === env.APP_KEY;
+        if (!isTrainer) {
+          const c = url.searchParams.get("c");
+          const okc = await clientByToken(env, c, url.searchParams.get("t"));
+          if (!okc || !k.startsWith("v/" + c + "/")) return cors(env, JSON.stringify({ error: "bad token" }), 403);
+        }
+        return serveVideo(env, k, request);
+      }
+      if (url.pathname === "/videos") {
+        const c = url.searchParams.get("c");
+        if (!c) return cors(env, JSON.stringify({ error: "missing c" }), 400);
+        const isTrainer = env.APP_KEY && url.searchParams.get("key") === env.APP_KEY;
+        if (!isTrainer) {
+          const okc = await clientByToken(env, c, url.searchParams.get("t"));
+          if (!okc) return cors(env, JSON.stringify({ error: "bad token" }), 403);
+        }
+        return cors(env, JSON.stringify({ videos: await vindex(env, c) }));
+      }
+      if (url.pathname === "/video-del") {
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        const k = url.searchParams.get("k") || "";
+        if (!k.startsWith("v/")) return cors(env, JSON.stringify({ error: "bad key" }), 400);
+        const c = k.split("/")[1];
+        try { await env.VIDEOS.delete(k); } catch {}
+        const list = (await vindex(env, c)).filter(v => v.k !== k);
+        await vsave(env, c, list);
+        return cors(env, JSON.stringify({ ok: true }));
+      }
+      if (url.pathname === "/video-pin") {
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        const k = url.searchParams.get("k") || "";
+        const ms = url.searchParams.get("ms") === "1" ? 1 : 0;
+        const c = k.split("/")[1];
+        const list = await vindex(env, c);
+        const v = list.find(x => x.k === k);
+        if (!v) return cors(env, JSON.stringify({ error: "not found" }), 404);
+        v.ms = ms;
+        await vsave(env, c, list);
+        return cors(env, JSON.stringify({ ok: true, ms }));
       }
 
       if (url.pathname === "/") return cors(env, "Dwil Spotter worker — OK", 200, "text/plain");

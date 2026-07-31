@@ -1032,6 +1032,17 @@ function reviewView(){
           <button class="btn2 grow" style="color:#e0a8a8" data-subreject="${i}">Reject</button>
         </div></div>`;
     }
+    if (s.kind === "video"){
+      return `<div class="card">
+        <div class="row"><div class="grow"><div class="cname">🎥 ${esc(name)} — movement check</div>
+        <div class="csub">${fmtDate(s.date)} · ${esc(s.title||"movement")}${s.text&&s.text!=="(movement check video)"?" · "+esc(s.text):""}</div></div></div>
+        <div class="row" style="gap:8px;margin-top:10px">
+          ${s.vkey?`<button class="btn2" data-mvplay="${esc(s.vkey)}">▶ Watch</button>`:""}
+          ${c?`<button class="btn2 grow" data-subapprove="${i}">✓ Accept → Moves</button>`:""}
+          <button class="btn2 grow" style="color:#e0a8a8" data-subreject="${i}">Reject</button>
+        </div>
+        <div class="muted" style="margin-top:6px;font-size:10px">Accepting files it in their Movement Library — score it there. Rejecting deletes the video.</div></div>`;
+    }
     if (s.kind === "photo"){
       return `<div class="card">
         <div class="row"><div class="grow"><div class="cname">📸 ${esc(name)} — progress photos taken</div>
@@ -1142,9 +1153,251 @@ function fatigueBars(cur){
   </div>`;
 }
 
+/* ============ Movement Library (video movement-quality tracking) ============ */
+const RUBRICS = {
+  "sl-squat":       { label:"Single-leg squat", crit:["Depth — controlled to ~60° knee bend","Pelvis stays level (no drop)","Knee tracks over foot (no valgus collapse)","Trunk steady — no lean or rotation"] },
+  "step-down":      { label:"Step-down",        crit:["Pelvis level throughout","Knee valgus controlled","Smooth 2–3s lowering — no thud","Trunk upright, no lean"] },
+  "hop-landing":    { label:"Hop & landing",    crit:["Soft, quiet landing (knee + hip bend)","No knee valgus at contact","Stick & hold 2s without wobble","Effort/height symmetrical vs other side"] },
+  "overhead-squat": { label:"Overhead squat",   crit:["Heels stay down","Knees track over feet","Arms stay overhead — no trunk collapse","Full depth achieved"] },
+  "custom":         { label:"Custom movement",  crit:["Control — smooth, no compensation","Alignment — joints stack well","Range — full intended depth/range","Symmetry vs other side"] },
+};
+function rubricFor(id){ return RUBRICS[id] || RUBRICS.custom; }
+function mvSlug(s){ return String(s||"").toLowerCase().replace(/\s+/g,"-"); }
+function chkTotal(chk){ return chk && chk.scores ? chk.scores.reduce((a,b)=>a+(b||0),0) : null; }
+function mvScoreColor(total, max){ const p = total/(max||8); return p>=0.85?"#7dc98f":p>=0.6?"#d4c46a":p>=0.35?"#d4a04d":"#c95f5f"; }
+
+let vidCache = {}; const _vidBusy = {};
+function fetchVids(c, force){
+  if (!S.syncUrl || !S.syncKey || _vidBusy[c.id]) return;
+  if (vidCache[c.id] && !force) return;
+  _vidBusy[c.id] = true;
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/videos?c=${encodeURIComponent(c.id)}&key=${encodeURIComponent(S.syncKey)}`)
+    .then(r=>r.json()).then(d=>{ _vidBusy[c.id]=false; if (d.videos){ vidCache[c.id]=d.videos; if (view.tab==="moves") render(); } })
+    .catch(()=>{ _vidBusy[c.id]=false; });
+}
+function vidUrl(k){ return `${S.syncUrl.replace(/\/+$/,"")}/video?k=${encodeURIComponent(k)}&key=${encodeURIComponent(S.syncKey)}`; }
+async function uploadVideo(c, file, meta){
+  const q = new URLSearchParams({ c: c.id, key: S.syncKey, mv: meta.mv, side: meta.side||"", date: meta.date, note: meta.note||"" });
+  const r = await fetch(`${S.syncUrl.replace(/\/+$/,"")}/video?${q}`, { method:"POST", headers:{ "Content-Type": file.type||"video/mp4" }, body: file });
+  const d = await r.json();
+  if (!d.ok) throw new Error(d.error || "upload failed");
+  vidCache[c.id] = null;
+  return d.key;
+}
+function findCheck(c, id){ return (c.moveChecks||[]).find(k=>k.id===id); }
+function feedInjuryTest(c, chk){
+  if (!chk.injId || !chk.scores) return;
+  const inj = (c.injuries||[]).find(i=>i.id===chk.injId); if (!inj) return;
+  const name = (chk.rubricId==="custom" ? chk.mv : rubricFor(chk.rubricId).label) + " quality";
+  inj.tests = inj.tests || [];
+  let t = inj.tests.find(x=>x.name===name);
+  if (!t){ t = { name, unit:"pts", target: rubricFor(chk.rubricId).crit.length*2, entries:[] }; inj.tests.push(t); }
+  t.entries = (t.entries||[]).filter(e=>e.date!==chk.date);
+  t.entries.push({ date: chk.date, value: chkTotal(chk) });
+  t.entries.sort((a,b)=>a.date.localeCompare(b.date));
+}
+function moveGroups(c){
+  const vids = vidCache[c.id] || [];
+  const checks = c.moveChecks || [];
+  const gm = {};
+  for (const v of vids){
+    const s = mvSlug(v.mv);
+    (gm[s] = gm[s] || { mv: v.mv, items: [] }).items.push({ v, chk: checks.find(k=>k.vkey===v.k) || null });
+  }
+  for (const k of checks){
+    if (k.vkey && vids.some(v=>v.k===k.vkey)) continue;
+    const s = mvSlug(k.mv);
+    (gm[s] = gm[s] || { mv: k.mv, items: [] }).items.push({ v: k.vkey ? { k:k.vkey, mv:k.mv, side:k.side, date:k.date, missing:true } : null, chk: k });
+  }
+  Object.values(gm).forEach(g => g.items.sort((a,b)=>String((a.v&&a.v.date)||(a.chk&&a.chk.date)||"").localeCompare(String((b.v&&b.v.date)||(b.chk&&b.chk.date)||""))));
+  return Object.values(gm).sort((a,b)=>a.mv.localeCompare(b.mv));
+}
+function tabMoves(c){
+  fetchVids(c);
+  const synced = S.syncUrl && S.syncKey;
+  const loading = synced && !vidCache[c.id] && _vidBusy[c.id];
+  const groups = moveGroups(c);
+  const cards = groups.map(g=>{
+    const scored = g.items.filter(it=>it.chk && it.chk.scores);
+    const trend = scored.map(it=>{ const t=chkTotal(it.chk), m=rubricFor(it.chk.rubricId).crit.length*2;
+      return `<span class="chip" style="color:${mvScoreColor(t,m)};border-color:${mvScoreColor(t,m)}44">${t}/${m}</span>`; }).join(" <span style=\"color:#5a6377\">→</span> ");
+    const rows = g.items.map(it=>{
+      const date = (it.v&&it.v.date)||(it.chk&&it.chk.date)||"";
+      const by = it.v && it.v.by==="client" ? " · from client" : "";
+      const side = (it.v&&it.v.side)||(it.chk&&it.chk.side)||"";
+      const t = it.chk ? chkTotal(it.chk) : null;
+      const m = it.chk ? rubricFor(it.chk.rubricId).crit.length*2 : 8;
+      const first = g.items[0]===it && g.items.length>1;
+      return `<div class="minirow" style="align-items:center">
+        <div class="grow" style="min-width:0;font-size:12px">${fmtDate(date)}${side?` <span class="chip" style="font-size:10px;padding:1px 6px">${side}</span>`:""}${first?` <span style="color:#8b93a5;font-size:10px">baseline</span>`:""}${it.v&&it.v.ms?" 📌":""}<span style="color:#8b93a5;font-size:11px">${by}</span>
+          ${t!=null?`<span style="color:${mvScoreColor(t,m)};font-weight:700;font-size:11px"> ${t}/${m}</span>`:` <span style="color:#8b93a5;font-size:10px">unscored</span>`}
+          ${it.chk&&it.chk.note?`<div style="color:#8b93a5;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(it.chk.note)}</div>`:""}</div>
+        ${it.v&&!it.v.missing?`<button class="btn-sm" data-mvplay="${esc(it.v.k)}">▶</button>`:""}
+        ${it.chk?`<button class="btn-sm" data-mvscore="${it.chk.id}">${it.chk.scores?"Edit":"Score"}</button>`:(it.v?`<button class="btn-sm" data-mvadopt="${esc(it.v.k)}">Score</button>`:"")}
+        ${it.v&&!it.v.missing?`<button class="btn-x" data-mvpin="${esc(it.v.k)}" title="${it.v.ms?"Unpin":"Pin as milestone (never auto-trimmed)"}">${it.v.ms?"📌":"📍"}</button>`:""}
+        <button class="btn-x" data-mvdel="${it.chk?it.chk.id:""}|${it.v?esc(it.v.k):""}">✕</button></div>`;
+    }).join("");
+    const vidN = g.items.filter(it=>it.v&&!it.v.missing).length;
+    return `<div class="card"><div class="cname" style="font-size:14px">${esc(g.mv.replace(/\b\w/g,ch=>ch.toUpperCase()))}</div>
+      ${trend?`<div style="margin:6px 0 2px">${trend}</div>`:""}
+      <div style="margin-top:6px">${rows}</div>
+      ${vidN>=2?`<button class="btn2" style="width:100%;margin-top:8px" data-mvcompare="${esc(g.mv)}">⇄ Compare side-by-side</button>`:""}</div>`;
+  }).join("");
+  return `<div class="muted" style="margin-bottom:8px">Film the same movement over time — score it against a quality rubric and watch control come back. Clips auto-keep: baseline + pinned + latest 4 per movement.</div>
+    ${loading?`<div class="muted">Loading clips…</div>`:""}
+    ${cards || (loading?"":`<div class="empty">No movement checks yet.${synced?"":" Set up sync in ⛭ to store videos."}</div>`)}
+    <button class="btn" style="width:100%;margin-top:10px" data-act="mvnew">🎥 New movement check</button>
+    ${synced?`<div class="footer-note">Videos are stored in your private cloud bucket — clients only ever see their own via their link.</div>`:""}`;
+}
+/* ---- modals ---- */
+function mvPlayModal(k, k2){
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  const one = sc => `<video controls autoplay playsinline src="${sc}" style="width:100%;max-height:${k2?"38vh":"64vh"};border-radius:10px;background:#000"></video>`;
+  wrap.innerHTML = `<div class="modal" style="max-width:640px">${one(vidUrl(k))}${k2?`<div style="height:8px"></div>`+one(vidUrl(k2)):""}
+    <button class="btn2" style="width:100%;margin-top:10px" id="mvClose">Close</button></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", ev=>{ if (ev.target===wrap||ev.target.id==="mvClose"){ wrap.querySelectorAll("video").forEach(v=>v.pause()); wrap.remove(); } });
+}
+function mvCompareModal(c, mv){
+  const items = moveGroups(c).find(g=>g.mv===mv);
+  const vids = items ? items.items.filter(it=>it.v&&!it.v.missing).map(it=>it.v) : [];
+  if (vids.length<2) return;
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  const opt = (sel) => vids.map((v,i)=>`<option value="${i}" ${i===sel?"selected":""}>${fmtDate(v.date)}${v.side?" ("+v.side+")":""}${i===0?" — baseline":""}</option>`).join("");
+  wrap.innerHTML = `<div class="modal" style="max-width:680px"><h2 style="margin-top:0">${esc(mv)} — compare</h2>
+    <div class="row" style="gap:8px"><select id="cmpA" style="flex:1">${opt(0)}</select><select id="cmpB" style="flex:1">${opt(vids.length-1)}</select></div>
+    <div class="row" style="gap:8px;margin-top:8px;align-items:flex-start">
+      <video id="cmpVA" controls playsinline style="flex:1;min-width:0;max-height:44vh;border-radius:10px;background:#000"></video>
+      <video id="cmpVB" controls playsinline style="flex:1;min-width:0;max-height:44vh;border-radius:10px;background:#000"></video></div>
+    <button class="btn2" style="width:100%;margin-top:10px" id="cmpClose">Close</button></div>`;
+  document.body.appendChild(wrap);
+  const setV = ()=>{ wrap.querySelector("#cmpVA").src = vidUrl(vids[+wrap.querySelector("#cmpA").value].k);
+    wrap.querySelector("#cmpVB").src = vidUrl(vids[+wrap.querySelector("#cmpB").value].k); };
+  setV();
+  wrap.querySelector("#cmpA").onchange = setV; wrap.querySelector("#cmpB").onchange = setV;
+  wrap.addEventListener("click", ev=>{ if (ev.target===wrap||ev.target.id==="cmpClose"){ wrap.querySelectorAll("video").forEach(v=>v.pause()); wrap.remove(); } });
+}
+function rubricGrid(rid, scores){
+  const R = rubricFor(rid);
+  return R.crit.map((cr,i)=>`<div style="margin-top:8px"><div style="font-size:12px;color:#CFD3DC">${esc(cr)}</div>
+    <div class="row" style="gap:6px;margin-top:4px">${[0,1,2].map(v=>`<button class="btn2 grow rub" data-ri="${i}" data-rv="${v}" style="${scores&&scores[i]===v?"border-color:var(--steel);color:var(--ice);font-weight:800":""}">${v===0?"0 · poor":v===1?"1 · fair":"2 · good"}</button>`).join("")}</div></div>`).join("");
+}
+function mvScoreModal(c, chkId){
+  const chk = findCheck(c, chkId); if (!chk) return;
+  const scores = chk.scores ? chk.scores.slice() : rubricFor(chk.rubricId).crit.map(()=>null);
+  const injs = activeInjuries(c);
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  wrap.innerHTML = `<div class="modal"><h2 style="margin-top:0">${esc(chk.mv)} — quality score</h2>
+    <div class="muted" style="font-size:11px">${fmtDate(chk.date)}${chk.side?" · "+chk.side:""} · 0–2 per item, judged from the clip</div>
+    <div id="rubWrap">${rubricGrid(chk.rubricId, scores)}</div>
+    ${injs.length?`<div style="margin-top:10px;font-size:12px;color:#CFD3DC">Feed an injury's tests (counts toward healing index):</div>
+      <select id="mvInj" style="width:100%;margin-top:4px"><option value="">— not injury-linked —</option>
+      ${injs.map(i=>`<option value="${i.id}" ${chk.injId===i.id?"selected":""}>${esc(i.label)}</option>`).join("")}</select>`:""}
+    <input type="text" id="mvNote" placeholder="note (optional)" value="${esc(chk.note||"")}" style="width:100%;margin-top:8px">
+    <div class="row" style="gap:8px;margin-top:12px">
+      <button class="btn grow" id="mvSave">Save score</button>
+      <button class="btn2" id="mvCancel">Cancel</button></div></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", ev=>{
+    const rb = ev.target.closest(".rub");
+    if (rb){ scores[+rb.dataset.ri] = +rb.dataset.rv; wrap.querySelector("#rubWrap").innerHTML = rubricGrid(chk.rubricId, scores); return; }
+    if (ev.target===wrap || ev.target.id==="mvCancel"){ wrap.remove(); return; }
+    if (ev.target.id==="mvSave"){
+      if (scores.some(s2=>s2==null)){ toast("Score every item (0–2)"); return; }
+      chk.scores = scores;
+      chk.note = wrap.querySelector("#mvNote").value.trim();
+      const injSel = wrap.querySelector("#mvInj");
+      chk.injId = injSel ? (injSel.value || null) : chk.injId;
+      feedInjuryTest(c, chk);
+      save(); wrap.remove(); render();
+      const t = chkTotal(chk), m = rubricFor(chk.rubricId).crit.length*2;
+      toast(`Scored ${t}/${m}${chk.injId?" — fed into healing index tests":""}`);
+    }
+  });
+}
+function mvNewModal(c){
+  if (!S.syncUrl || !S.syncKey){ toast("Set up sync in ⛭ first — videos need cloud storage"); return; }
+  const injs = activeInjuries(c);
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  wrap.innerHTML = `<div class="modal"><h2 style="margin-top:0">New movement check</h2>
+    <select id="mvSel" style="width:100%">${Object.keys(RUBRICS).map(k=>`<option value="${k}">${RUBRICS[k].label}</option>`).join("")}</select>
+    <input type="text" id="mvCustom" placeholder="movement name" style="width:100%;margin-top:8px;display:none">
+    <div class="row" style="gap:6px;margin-top:8px">
+      ${["","L","R"].map(s2=>`<button class="btn2 grow mvside" data-s="${s2}" style="${s2===""?"border-color:var(--steel)":""}">${s2||"—"}</button>`).join("")}
+      <input type="date" id="mvDate" value="${todayISO()}" style="flex:2"></div>
+    ${injs.length?`<select id="mvInj2" style="width:100%;margin-top:8px"><option value="">— not injury-linked —</option>
+      ${injs.map(i=>`<option value="${i.id}">${esc(i.label)}</option>`).join("")}</select>`:""}
+    <input type="text" id="mvNote2" placeholder="note (optional)" style="width:100%;margin-top:8px">
+    <label class="btn2" style="display:block;text-align:center;margin-top:8px;cursor:pointer" id="mvFileLbl">🎥 Film / choose video<input type="file" id="mvFile" accept="video/*" capture="environment" style="display:none"></label>
+    <div class="row" style="gap:8px;margin-top:12px">
+      <button class="btn grow" id="mvUp">Save</button>
+      <button class="btn2" id="mvCancel2">Cancel</button></div>
+    <div class="muted" style="font-size:10px;margin-top:6px">Video optional — you can score live and film next time. Keep clips short (under ~30s).</div></div>`;
+  document.body.appendChild(wrap);
+  let side = "";
+  wrap.querySelector("#mvSel").onchange = ev => { wrap.querySelector("#mvCustom").style.display = ev.target.value==="custom" ? "block" : "none"; };
+  wrap.querySelector("#mvFile").onchange = ev => { const f = ev.target.files[0];
+    if (f) wrap.querySelector("#mvFileLbl").firstChild.textContent = "✓ " + (f.name.length>28?f.name.slice(0,28)+"…":f.name) + " (" + Math.round(f.size/1048576) + "MB)"; };
+  wrap.addEventListener("click", async ev=>{
+    const sb = ev.target.closest(".mvside");
+    if (sb){ side = sb.dataset.s; wrap.querySelectorAll(".mvside").forEach(b=>b.style.borderColor=""); sb.style.borderColor="var(--steel)"; return; }
+    if (ev.target===wrap || ev.target.id==="mvCancel2"){ wrap.remove(); return; }
+    if (ev.target.id==="mvUp"){
+      const rid = wrap.querySelector("#mvSel").value;
+      const mv = rid==="custom" ? (wrap.querySelector("#mvCustom").value.trim() || "custom movement") : RUBRICS[rid].label.toLowerCase();
+      const date = wrap.querySelector("#mvDate").value || todayISO();
+      const note = wrap.querySelector("#mvNote2").value.trim();
+      const injSel = wrap.querySelector("#mvInj2");
+      const file = wrap.querySelector("#mvFile").files[0];
+      const btn = wrap.querySelector("#mvUp");
+      let vkey = null;
+      if (file){
+        if (file.size > 95*1024*1024){ toast("Over 95MB — trim the clip first"); return; }
+        btn.textContent = "Uploading…"; btn.disabled = true;
+        try { vkey = await uploadVideo(c, file, { mv, side, date, note }); }
+        catch(e2){ btn.textContent = "Save"; btn.disabled = false; toast("Upload failed: " + e2.message); return; }
+      }
+      c.moveChecks = c.moveChecks || [];
+      const chk = { id: Math.random().toString(36).slice(2,10), date, mv, side, vkey, rubricId: rid, scores: null, note, injId: injSel ? (injSel.value||null) : null };
+      c.moveChecks.push(chk);
+      save(); wrap.remove(); render();
+      mvScoreModal(c, chk.id);
+    }
+  });
+}
+function mvAdopt(c, vkey){
+  const vids = vidCache[c.id] || [];
+  const v = vids.find(x=>x.k===vkey); if (!v) return;
+  const rid = Object.keys(RUBRICS).find(k => k!=="custom" && (mvSlug(RUBRICS[k].label)===mvSlug(v.mv) || k===mvSlug(v.mv))) || "custom";
+  c.moveChecks = c.moveChecks || [];
+  const chk = { id: Math.random().toString(36).slice(2,10), date: v.date, mv: v.mv, side: v.side||"", vkey, rubricId: rid, scores: null, note: v.note||"", injId: null };
+  c.moveChecks.push(chk);
+  save(); mvScoreModal(c, chk.id);
+}
+function mvDelete(c, chkId, vkey){
+  if (!confirm("Delete this movement check" + (vkey ? " and its video" : "") + "?")) return;
+  if (chkId) c.moveChecks = (c.moveChecks||[]).filter(k=>k.id!==chkId);
+  if (vkey && S.syncUrl && S.syncKey){
+    fetch(`${S.syncUrl.replace(/\/+$/,"")}/video-del?key=${encodeURIComponent(S.syncKey)}&k=${encodeURIComponent(vkey)}`).catch(()=>{});
+    vidCache[c.id] = (vidCache[c.id]||[]).filter(v=>v.k!==vkey);
+  }
+  save(); render(); toast("Deleted");
+}
+function mvPin(c, vkey){
+  const v = (vidCache[c.id]||[]).find(x=>x.k===vkey); if (!v) return;
+  const ms = v.ms ? 0 : 1;
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/video-pin?key=${encodeURIComponent(S.syncKey)}&k=${encodeURIComponent(vkey)}&ms=${ms}`)
+    .then(r=>r.json()).then(d=>{ if (d.ok){ v.ms = ms; render(); toast(ms?"Pinned — never auto-trimmed":"Unpinned"); } })
+    .catch(()=>toast("Couldn't reach sync server"));
+}
+
 function clientView(){
   const c = client(); if(!c){ view.page="roster"; return rosterView(); }
-  const tabs = [["fatigue","Fatigue"],["injuries","Injuries"],["recovery","Recovery"],["log","Log"],["brief","Brief"],["charts","Charts"],["history","History"],["notes","Notes"]]
+  const tabs = [["fatigue","Fatigue"],["injuries","Injuries"],["recovery","Recovery"],["log","Log"],["brief","Brief"],["charts","Charts"],["moves","Moves"],["history","History"],["notes","Notes"]]
     .map(([k,l])=>`<button class="tab ${view.tab===k?"on":""}" data-tab="${k}">${l}</button>`).join("");
   return `<header><button class="backlink" data-act="back">‹ Roster</button>
     <div class="word" style="margin-left:6px"><b>${esc(c.name)}</b></div>
@@ -1152,7 +1405,7 @@ function clientView(){
     <div class="sub">${crescent}</div></header>
     <div class="muted">${esc(c.profile||"")}</div>
     <div class="tabs">${tabs}</div>
-    ${ {fatigue:tabFatigue,injuries:tabInjuries,recovery:tabRecovery,log:tabLog,brief:tabBrief,charts:tabCharts,history:tabHistory,notes:tabNotes}[view.tab](c) }
+    ${ {fatigue:tabFatigue,injuries:tabInjuries,recovery:tabRecovery,log:tabLog,brief:tabBrief,charts:tabCharts,moves:tabMoves,history:tabHistory,notes:tabNotes}[view.tab](c) }
     ${assignTarget!==null?assignModal():""}
     ${pickerOpen?pickerModal():""}`;
 }
@@ -2554,6 +2807,19 @@ function approveSub(idx){
     const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
     ackSub(sid); render(); toast(`Check-in attached to ${inj.label}`); return;
   }
+  if (s.kind === "video"){
+    const m = /^(.*?)(?:\s*\((L|R)\))?$/.exec(s.title || "movement");
+    const mv = ((m && m[1]) || "movement").trim();
+    const side = (m && m[2]) || "";
+    const rid = Object.keys(RUBRICS).find(k => k!=="custom" && (mvSlug(RUBRICS[k].label)===mvSlug(mv) || k===mvSlug(mv))) || "custom";
+    c.moveChecks = c.moveChecks || [];
+    c.moveChecks.push({ id: Math.random().toString(36).slice(2,10), date: s.date || todayISO(), mv, side,
+      vkey: s.vkey || null, rubricId: rid, scores: null,
+      note: (s.text && s.text!=="(movement check video)") ? s.text : "", injId: null });
+    vidCache[s.client] = null;
+    const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
+    ackSub(sid); render(); toast(`Movement check saved for ${c.name} — score it in Moves`); return;
+  }
   if (s.kind === "photo"){
     c.photoLog = c.photoLog || [];
     const d = s.date || todayISO();
@@ -2578,7 +2844,10 @@ function approveSub(idx){
 }
 function rejectSub(idx){
   const s = pendingSubs[idx]; if (!s) return;
-  if (confirm("Reject and delete this submission?")){ const sid=s.id; pendingSubs=pendingSubs.filter(x=>x!==s); ackSub(sid); render(); toast("Rejected"); }
+  if (confirm("Reject and delete this submission?")){
+    if (s.kind==="video" && s.vkey && S.syncUrl && S.syncKey)
+      fetch(`${S.syncUrl.replace(/\/+$/,"")}/video-del?key=${encodeURIComponent(S.syncKey)}&k=${encodeURIComponent(s.vkey)}`).catch(()=>{});
+    const sid=s.id; pendingSubs=pendingSubs.filter(x=>x!==s); ackSub(sid); render(); toast("Rejected"); }
 }
 
 function autoBackup(force){
@@ -2657,12 +2926,18 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injflag],[data-rfnone],[data-rfsome],[data-rfclear],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injflag],[data-rfnone],[data-rfsome],[data-rfclear],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject],[data-mvplay],[data-mvscore],[data-mvadopt],[data-mvpin],[data-mvdel],[data-mvcompare]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
     else if (ds.bmv){ toast(ds.bmv); }
     else if (ds.crange){ chartRange = ds.crange; render(); }
+    else if (ds.mvplay) mvPlayModal(ds.mvplay);
+    else if (ds.mvscore) mvScoreModal(client(), ds.mvscore);
+    else if (ds.mvadopt) mvAdopt(client(), ds.mvadopt);
+    else if (ds.mvpin) mvPin(client(), ds.mvpin);
+    else if (ds.mvdel!==undefined && ds.mvdel!==""){ const [ci,vk] = ds.mvdel.split("|"); mvDelete(client(), ci||null, vk||null); }
+    else if (ds.mvcompare) mvCompareModal(client(), ds.mvcompare);
     else if (ds.subapprove!==undefined && ds.subapprove!=="") approveSub(+ds.subapprove);
     else if (ds.subreject!==undefined && ds.subreject!=="") rejectSub(+ds.subreject);
     else if (ds.injmus){ injSel[ds.injmus] = !injSel[ds.injmus]; if(!injSel[ds.injmus]) delete injSel[ds.injmus]; render(); }
@@ -2794,6 +3069,7 @@ function bind(){
       else if (a==="add-note"){ const tx=$("#notebox").value.trim(); if(tx){ client().notes.unshift({date:todayISO(),text:tx}); save(); render(); } }
       else if (a==="settings") settingsMenu();
       else if (a==="client-menu") clientMenu();
+      else if (a==="mvnew") mvNewModal(client());
       else if (a==="add-client") addClient();
       else if (a==="save-rec") saveRecovery();
       else if (a==="whoop-sync") syncWhoop();

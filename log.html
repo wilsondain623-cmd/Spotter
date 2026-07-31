@@ -543,6 +543,7 @@ let tab = "log";       /* log | progress */
 let me = null;         /* /me payload */
 let meErr = null;
 let recSent = false;
+let mvSent = false;
 let phSent = false;
 let pcSent = false;
 
@@ -596,6 +597,35 @@ function photoCard(){
   </div>`;
 }
 
+function moveCard(){
+  if (mvSent) return `<div class="card done" style="padding:18px"><div style="font-size:24px">\u2713</div><div class="sub" style="margin-top:4px">Movement video sent \u2014 your coach will review it</div></div>`;
+  return `<div class="card"><h1 style="font-size:16px">Movement check <span style="color:var(--dim);font-weight:400;font-size:12px">(if your coach asked for one)</span></h1>
+    <div class="sub">Film the movement your coach asked for \u2014 side-on, whole body in frame, under ~30 seconds. It goes straight to their review, nowhere else.</div>
+    <label>movement</label>
+    <input type="text" id="mvname" list="mvopts" placeholder="e.g. single-leg squat">
+    <datalist id="mvopts"><option value="single-leg squat"><option value="step-down"><option value="hop &amp; landing"><option value="overhead squat"></datalist>
+    <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+      <label style="margin:0;flex:1">side<select id="mvside" style="width:100%"><option value="">both / n-a</option><option value="L">left</option><option value="R">right</option></select></label>
+      <label style="margin:0;flex:2">note (optional)<input type="text" id="mvnote" placeholder="e.g. knee felt fine"></label></div>
+    <label class="btn" style="display:block;text-align:center;margin-top:12px;cursor:pointer" id="mvlbl">\ud83c\udfa5 Film / choose video<input type="file" id="mvfile" accept="video/*" capture="environment" style="display:none"></label>
+    <button class="btn" id="sendmv" style="margin-top:8px;display:none">Send to coach</button>
+  </div>`;
+}
+function sendMove(){
+  const f = (app.querySelector("#mvfile").files||[])[0];
+  if (!f){ alert("Choose or film a video first"); return; }
+  if (f.size > 95*1024*1024){ alert("Video is over 95MB \u2014 trim it shorter and retry"); return; }
+  const mv = app.querySelector("#mvname").value.trim() || "movement";
+  const side = app.querySelector("#mvside").value;
+  const note = app.querySelector("#mvnote").value.trim();
+  const btn = app.querySelector("#sendmv"); btn.disabled = true; btn.textContent = "Uploading\u2026 (keep this page open)";
+  const q = new URLSearchParams({ c: client, t: token, mv, side, note, date: todayISO() });
+  fetch(`${worker}/video?${q}`, { method:"POST", headers:{ "Content-Type": f.type || "video/mp4" }, body: f })
+    .then(r=>r.json()).then(d=>{
+      if (d.ok){ mvSent = true; render(); }
+      else { btn.disabled=false; btn.textContent="Send to coach"; alert("Could not send: "+(d.error||"try again")); }
+    }).catch(()=>{ btn.disabled=false; btn.textContent="Send to coach"; alert("Network error \u2014 videos need a decent connection, retry on wifi."); });
+}
 function e1rm(w, r){ return (!r || r <= 1) ? w : Math.round(w * (1 + Math.min(r, 12) / 30)); }
 function repN(r){ const m = String(r??"").match(/\d+/); return m ? +m[0] : 0; }
 function holdS(s){ const m = String(s??"").match(/(\d+(?:\.\d+)?)\s*(min)?/i); return m ? Math.round(+m[1] * (m[2] ? 60 : 1)) : 0; }
@@ -714,7 +744,8 @@ function render(){
     </div>
     ${recCard()}
     ${photoCard()}
-    ${painCard()}`;
+    ${painCard()}
+    ${moveCard()}`;
   app.querySelector("#tabLog").addEventListener("click", ()=>{ tab="log"; render(); });
   app.querySelector("#tabProg").addEventListener("click", ()=>{ tab="progress"; render(); });
   const ta = app.querySelector("#t");
@@ -732,6 +763,12 @@ function render(){
   if (phb) phb.addEventListener("click", sendPhoto);
   const pcb = app.querySelector("#sendpc");
   if (pcb) pcb.addEventListener("click", sendPain);
+  const mvf = app.querySelector("#mvfile");
+  if (mvf) mvf.addEventListener("change", ()=>{ const f=(mvf.files||[])[0]; if (f){
+    app.querySelector("#mvlbl").firstChild.textContent = "\u2713 " + (f.name.length>24?f.name.slice(0,24)+"\u2026":f.name) + " (" + Math.round(f.size/1048576) + "MB)";
+    app.querySelector("#sendmv").style.display = "block"; } });
+  const mvb = app.querySelector("#sendmv");
+  if (mvb) mvb.addEventListener("click", sendMove);
 }
 
 function send(){
