@@ -2593,14 +2593,137 @@ function applyParsedSession(c, items, date, title, solo){
   c.sessions.sort((a,b)=>b.date.localeCompare(a.date));
   rebuildClient(c);
   let prMsg = "";
+  const prList = [];
   for (const p of c.prs){
     const b = before[p.exercise];
     if (!b) continue;
-    if (p.hold && b.hold && (p.secs||0) > (b.s2||0)) prMsg = ` New PR: ${p.exercise} ${p.secs}s hold!`;
-    else if (p.bw && b.bw && (p.reps||0) > (b.r||0)) prMsg = ` New PR: ${p.exercise} ${p.reps} reps!`;
-    else if (!p.hold && !p.bw && !b.hold && !b.bw && b.w != null && p.weight > b.w) prMsg = ` New PR: ${p.exercise} ${p.weight} lbs!`;
+    if (p.hold && b.hold && (p.secs||0) > (b.s2||0)){ prMsg = ` New PR: ${p.exercise} ${p.secs}s hold!`; prList.push(`${p.exercise} ${p.secs}s hold`); }
+    else if (p.bw && b.bw && (p.reps||0) > (b.r||0)){ prMsg = ` New PR: ${p.exercise} ${p.reps} reps!`; prList.push(`${p.exercise} ${p.reps} reps`); }
+    else if (!p.hold && !p.bw && !b.hold && !b.bw && b.w != null && p.weight > b.w){ prMsg = ` New PR: ${p.exercise} ${p.weight} lbs!`; prList.push(`${p.exercise} ${p.weight}${p.detail?" ("+p.detail+")":""}`); }
   }
+  applyParsedSession.prs = prList;
   return prMsg;
+}
+
+/* ============ post-workout summary ============ */
+function curSnap(c){ return E.decaySnapshotAdj(c.snapshot, E.daysBetween(c.lastUpdated, todayISO()), effFactor(c)); }
+function curSys(c){ return E.decaySys(c.sysFatigue||0, E.daysBetween(c.lastUpdated, todayISO())); }
+function buildSummary(c, items, date, title, prs, before, after, sysB, sysA){
+  const deltas = E.MUSCLES.map(m=>({ m, d: Math.round(((after[m]||0)-(before[m]||0))*10)/10, v: after[m]||0 }))
+    .filter(x=>x.d >= 0.1).sort((a,b)=>b.d-a.d);
+  let sets = 0, lbs = 0, hardest = null, hardestE1 = 0;
+  const mix = { warmup:0, moderate:0, heavy:0, max:0 };
+  const e1 = (w,r)=> (!r||r<=1) ? w : Math.round(w*(1+Math.min(r,12)/30));
+  for (const it of items){
+    const n = it.setDetail ? it.setDetail.length : (it.bouts ? it.bouts.length : (it.sets||1));
+    sets += n;
+    if (it.setDetail){
+      for (const sd of it.setDetail){
+        mix[sd.intensity||it.intensity] = (mix[sd.intensity||it.intensity]||0)+1;
+        if (!it.bw && !it.hold && sd.weight!=null){ const r=repN(sd.reps); lbs += sd.weight*r;
+          const ee=e1(sd.weight,r); if (ee>hardestE1){ hardestE1=ee; hardest=`${sd.weight}×${r||"?"}`; } }
+        if (it.hold){ const s2=holdSecs({hold:true,reps:sd.reps}); if (!hardestE1 && s2 && (!hardest||s2>+String(hardest).replace(/s.*/,""))) hardest=`${s2}s hold`; }
+      }
+    } else {
+      mix[it.intensity] = (mix[it.intensity]||0)+n;
+      if (!it.bw && !it.hold && !it.dur && !it.dist && it.weight!=null){ const r=repN(it.reps); lbs += it.weight*r*n;
+        const ee=e1(it.weight,r); if (ee>hardestE1){ hardestE1=ee; hardest=`${it.weight}×${r||"?"}`; } }
+      if (it.hold && !hardestE1){ const s2=holdSecs(it); if (s2) hardest=`${s2}s hold`; }
+      if ((it.dur||it.dist) && !hardest) hardest = it.dist ? String(it.dist) : `${it.dur} min`;
+    }
+  }
+  const ready = deltas.filter(x=>x.v>4).slice(0,4).map(x=>({ m:x.m, days: daysToReady(x.m, x.v, effFactor(c)) })).filter(x=>x.days>0);
+  const hitSet = new Set(deltas.map(x=>x.m));
+  const fresh = E.MUSCLES.filter(m=>!hitSet.has(m) && (after[m]||0) < 2);
+  const freshBig = ["quads","hamstrings","glutes","back-lats","chest","shoulders"].map(g=>fresh.find(m=>m.includes(g.split("-")[0]))).filter(Boolean).slice(0,3);
+  const series = liftSeries(c);
+  const prog = [];
+  for (const it of items){
+    if (it.band !== undefined) continue;
+    const pts = series[it.name];
+    if (!pts || pts.length < 2) continue;
+    const lastP = pts[pts.length-1], prevP = pts[pts.length-2];
+    if (lastP.date !== date) continue;
+    const d = Math.round((lastP.e1 - prevP.e1)*10)/10;
+    if (d === 0) continue;
+    const unit = lastP.du ? (lastP.unit||"min") : lastP.bw ? "reps" : "lbs e1RM";
+    prog.push({ name: it.name, d, unit });
+  }
+  prog.sort((a,b)=>b.d-a.d);
+  const flags = [];
+  if (c.pay && c.pay.type==="pack" && c.pay.started){ const used = packUsed(c), left = Math.max(0,(c.pay.size||10)-used);
+    flags.push({ t:`Pack: session ${used} of ${c.pay.size}${left<=2?` — ${left===0?"complete, time to renew":left+" left"}`:""}`, col: left<=2?"#e0c48a":"#8b93a5" }); }
+  const injSet = injuredMuscles(c);
+  const hitInj = [...new Set(items.flatMap(it=>[...(it.primary||[]),...(it.secondary||[])]).filter(m=>injSet.has(m)))];
+  if (hitInj.length){ const inj = flaggedInjuries(c)[0];
+    flags.push({ t:`Loaded near ${inj?esc(inj.label):"an injury"} (${hitInj.join(", ")}) — worth a pain check-in tomorrow`, col:"#e3c8ec" }); }
+  const spike = layoffSpike(date, c.sessions);
+  if (spike > 1.01) flags.push({ t:`Back from a layoff — fatigue counted ×${Math.round(spike*100)/100} this session`, col:"#e0c48a" });
+  if (c.photoLog && c.photoLog.length){ const dsince = E.daysBetween(c.photoLog[c.photoLog.length-1], todayISO());
+    if (dsince > 30) flags.push({ t:`Progress photos due — last set ${dsince} days ago`, col:"#e0c48a" }); }
+  return { name:c.name, date, title, prs, deltas: deltas.slice(0,6), ex: items.length, sets, lbs: Math.round(lbs), hardest, mix,
+    ready, freshBig, sysB: Math.round(sysB*10)/10, sysA: Math.round(sysA*10)/10, sysWordA: sysWord(sysA), prog: prog.slice(0,3), flags };
+}
+function recapText(d){
+  const lines = [`${d.title} done ✅ (${fmtDate(d.date)})`];
+  lines.push(`${d.ex} exercise${d.ex>1?"s":""}, ${d.sets} sets${d.lbs?`, ${d.lbs.toLocaleString()} lbs moved`:""}${d.hardest?` — top set ${d.hardest}`:""}`);
+  if (d.prs.length) lines.push(`🏆 New PR${d.prs.length>1?"s":""}: ${d.prs.join(", ")}`);
+  for (const p of d.prog.filter(x=>x.d>0)) lines.push(`📈 ${p.name} up ${p.d} ${p.unit} since last time`);
+  const hardShare = d.sets ? Math.round(100*((d.mix.heavy||0)+(d.mix.max||0))/d.sets) : 0;
+  if (hardShare >= 25) lines.push(`${hardShare}% of sets at heavy effort or above — strong work`);
+  lines.push(`Recover well: protein, water, sleep. See you next session 💪`);
+  return lines.join("\n");
+}
+function summaryModal(list){
+  if (!list.length) return;
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  const mixCols = { warmup:"#3a4661", moderate:"#4D7DB4", heavy:"#d4a04d", max:"#c95f5f" };
+  const cards = list.map((d,di)=>{
+    const chips = d.deltas.map(x=>{ const col = heat(x.v);
+      return `<span style="border:1px solid ${col};color:${col};border-radius:999px;padding:3px 10px;font-size:12px;display:inline-block;margin:0 6px 6px 0">${x.m} +${x.d}</span>`; }).join("");
+    const mixTotal = Object.values(d.mix).reduce((a,b)=>a+b,0)||1;
+    const mixBar = ["warmup","moderate","heavy","max"].filter(k=>d.mix[k]).map(k=>
+      `<div style="width:${Math.round(100*d.mix[k]/mixTotal)}%;background:${mixCols[k]}"></div>`).join("");
+    const mixLbl = ["warmup","moderate","heavy","max"].filter(k=>d.mix[k]).map(k=>`${Math.round(100*d.mix[k]/mixTotal)}% ${k}`).join(" · ");
+    const stat = (v,l)=>`<div style="background:var(--panel2);border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:15px;font-weight:800">${v}</div><div style="color:var(--dim);font-size:10px">${l}</div></div>`;
+    return `<div${di?` style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)"`:""}>
+      <div style="display:flex;align-items:baseline;gap:8px"><span style="color:var(--ice);font-size:16px;font-weight:800">${esc(d.name)}</span>
+        <span style="color:var(--dim);font-size:12px">${esc(d.title)} · ${fmtDate(d.date)}</span></div>
+      ${d.prs.length?`<div style="margin-top:10px;background:var(--panel2);border:1px solid var(--steel);border-radius:10px;padding:9px 12px">
+        <span style="color:var(--ice);font-size:13px;font-weight:800">🏆 ${d.prs.length} new PR${d.prs.length>1?"s":""}</span>
+        <div style="font-size:12px;margin-top:2px">${d.prs.map(esc).join(" · ")}</div></div>`:""}
+      <div style="margin-top:10px"><div style="color:var(--dim);font-size:10px;letter-spacing:.4px">MUSCLES HIT · FATIGUE ADDED</div>
+        <div style="margin-top:6px">${chips||'<span style="color:var(--dim);font-size:12px">Light day — nothing meaningfully fatigued.</span>'}</div></div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px">
+        ${stat(d.ex,"exercise"+(d.ex>1?"s":""))}${stat(d.sets,"sets")}${stat(d.lbs?d.lbs.toLocaleString():"—","lbs moved")}${stat(d.hardest||"—","top set")}</div>
+      ${mixLbl?`<div style="margin-top:10px"><div style="color:var(--dim);font-size:10px;letter-spacing:.4px">INTENSITY MIX</div>
+        <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-top:5px">${mixBar}</div>
+        <div style="color:var(--dim);font-size:10px;margin-top:3px">${mixLbl}</div></div>`:""}
+      <div style="margin-top:10px;background:var(--panel2);border-radius:10px;padding:9px 12px">
+        <div style="color:var(--dim);font-size:10px;letter-spacing:.4px">RECOVERY OUTLOOK</div>
+        <div style="font-size:12px;margin-top:4px;line-height:1.6;color:#CFD3DC">
+          ${d.ready.length?d.ready.map(r=>`${r.m} ~${r.days}d`).join(" · "):"Everything hit should be back within a day or two"}
+          · systemic ${d.sysB} → <span style="color:${heat(d.sysA)};font-weight:700">${d.sysA}</span> (${d.sysWordA})
+          ${d.freshBig.length?`<br>Fresh for next time: ${d.freshBig.join(", ")}`:""}</div></div>
+      ${d.prog.length?`<div style="margin-top:8px">${d.prog.map(p=>`<div style="font-size:12px;color:${p.d>0?"#7dc98f":"#e0a8a8"}">${p.d>0?"📈":"📉"} ${esc(p.name)} ${p.d>0?"+":""}${p.d} ${p.unit} vs last time</div>`).join("")}</div>`:""}
+      ${d.flags.length?`<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">${d.flags.map(f=>`<div style="font-size:12px;color:${f.col}">${f.t}</div>`).join("")}</div>`:""}
+    </div>`;
+  }).join("");
+  wrap.innerHTML = `<div class="modal" style="max-height:86vh;overflow-y:auto">
+    <h2 style="margin-top:0">Session saved</h2>${cards}
+    <div class="row" style="gap:8px;margin-top:14px">
+      <button class="btn2 grow" id="sumCopy">Copy client recap</button>
+      <button class="btn grow" id="sumDone">Done</button></div></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", ev=>{
+    if (ev.target===wrap || ev.target.id==="sumDone"){ wrap.remove(); return; }
+    if (ev.target.id==="sumCopy"){
+      const txt = list.map(recapText).join("\n\n————\n\n");
+      if (navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast("Recap copied — paste it into a text")).catch(()=>prompt("Copy this:", txt));
+      else prompt("Copy this:", txt);
+    }
+  });
 }
 
 function saveSession(){
@@ -2613,21 +2736,21 @@ function saveSession(){
   draftDate = $("#sessdate").value || todayISO();
   const title = $("#sesstitle").value.trim() || (p ? "Duo session" : "Session");
   let prMsgA = "", prMsgB = "";
-  if (itemsA.length) prMsgA = applyParsedSession(c, itemsA, draftDate, title);
-  if (p && itemsB.length) prMsgB = applyParsedSession(p, itemsB, draftDate, title);
+  const sums = [];
+  const befA = curSnap(c), sysBA = curSys(c);
+  const befB = p ? curSnap(p) : null, sysBB = p ? curSys(p) : 0;
+  const sDate = draftDate;
+  if (itemsA.length){ prMsgA = applyParsedSession(c, itemsA, draftDate, title);
+    sums.push(buildSummary(c, itemsA, sDate, title, applyParsedSession.prs||[], befA, curSnap(c), sysBA, curSys(c))); }
+  if (p && itemsB.length){ prMsgB = applyParsedSession(p, itemsB, draftDate, title);
+    sums.push(buildSummary(p, itemsB, sDate, title, applyParsedSession.prs||[], befB, curSnap(p), sysBB, curSys(p))); }
   const wasDuo = !!p, pName = p ? p.name : "";
   draft = []; resetDuo(); draftDate = todayISO(); draftTitle = ""; draftText = ""; store.removeItem(DRAFT_KEY);
   save();
   view.tab = "fatigue"; render();
   if (itemsA.length) checkPackRenewal(c);
   if (p && itemsB.length) checkPackRenewal(p);
-  if (wasDuo){
-    toast(`Saved to both — ${c.name}${prMsgA||""} · ${pName}${prMsgB||""}`);
-  } else {
-    const top = E.MUSCLES.slice().sort((a,b)=>c.snapshot[b]-c.snapshot[a]).slice(0,3)
-      .map(m=>`${m} ${E.round1(c.snapshot[m])}`).join(" · ");
-    toast(`Saved. Highest: ${top}.${prMsgA}`);
-  }
+  summaryModal(sums);
 }
 
 function confirmAssign(){
@@ -2904,9 +3027,11 @@ function approveSub(idx){
   const { parsed } = E.parseSession(s.text, S.customExercises);
   const items = parsed.map(p=>{ const m=exMuscles(p.name); return {...p, primary:m.p, secondary:m.s, sys:m.sys}; });
   if (!items.length){ toast("Nothing to log in that submission"); return; }
+  const befS = curSnap(c), sysBS = curSys(c);
   const prMsg = applyParsedSession(c, items, s.date, s.title||"Solo session", true);
+  const sum = buildSummary(c, items, s.date, s.title||"Solo session", applyParsedSession.prs||[], befS, curSnap(c), sysBS, curSys(c));
   const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
-  ackSub(sid); render(); toast(`Logged for ${c.name}.${prMsg}`);
+  ackSub(sid); render(); summaryModal([sum]);
 }
 function rejectSub(idx){
   const s = pendingSubs[idx]; if (!s) return;
