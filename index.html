@@ -50,7 +50,7 @@ input[type=text],input[type=number],input[type=date],textarea,select{
   color:var(--text);font-family:inherit;font-size:15px;padding:11px 12px;outline:none}
 input:focus,textarea:focus{border-color:var(--steel)}
 textarea{min-height:92px;resize:vertical;line-height:1.45}
-.tabs{display:flex;gap:6px;margin:14px 0 14px;overflow-x:auto;scrollbar-width:none}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 14px}
 .tabs::-webkit-scrollbar{display:none}
 .tab{flex-shrink:0;background:var(--panel);border:1px solid var(--line);color:var(--dim);padding:8px 14px;border-radius:20px;font-size:13px;font-weight:700}
 .tab.on{background:var(--steel);color:#fff;border-color:var(--steel)}
@@ -785,7 +785,7 @@ let _backupBusy = false;
 function save(){ store.setItem(LS_KEY, JSON.stringify(S)); autoBackup(); }
 save();
 
-let view = { page:"roster", clientId:null, tab:"fatigue" };
+let view = { page:"roster", clientId:null, tab:"brief" };
 let draft = [];
 let draftDate = todayISO();
 let draftTitle = "";
@@ -999,7 +999,7 @@ function checkPackRenewal(c){
   const used = packUsed(c), size = p.size || 10;
   if (used < size) return;
   setTimeout(() => {
-    if (confirm(`${c.name} just used session ${used} of ${size} — pack complete. Set up their next pack now?`)) payMenu(c);
+    appConfirm(`${c.name} just used session ${used} of ${size} — pack complete. Set up their next pack now?`, ()=>payMenu(c), {yes:"Set up pack"});
   }, 450);
 }
 function weekSessions(c){ const cut = new Date(Date.now()-7*86400000); const cutISO = cut.getFullYear()+"-"+String(cut.getMonth()+1).padStart(2,"0")+"-"+String(cut.getDate()).padStart(2,"0"); return c.sessions.filter(s=>!s.solo && s.date>cutISO).length; }
@@ -1089,6 +1089,7 @@ function fetchAssess(){
     }).catch(()=>{});
 }
 let _novMemo = {};
+const _chipEx = new Set();
 function render(){
   _novMemo = {};
   persistDraft();
@@ -1179,7 +1180,7 @@ function rosterView(){
       ? `<span class="chip" style="color:${readyColor(r.score)};border-color:${readyColor(r.score)}44">♥ ${r.score}</span>`
       : (b.recovering.length
         ? `<span class="chip hot">${b.recovering[0]} ${E.round1(b.current[b.recovering[0]])}</span>`
-        : `<span class="chip fresh">fresh</span>`);
+        : (last!=null && last<=10 ? `<span class="chip fresh">fresh</span>` : ``));
     const injN = flaggedInjuries(c).length;
     let payChip = "";
     if (c.pay && c.pay.type==="pack" && c.pay.started){ const left = Math.max(0,(c.pay.size||10)-packUsed(c));
@@ -1466,13 +1467,14 @@ function mvAdopt(c, vkey){
   save(); mvScoreModal(c, chk.id);
 }
 function mvDelete(c, chkId, vkey){
-  if (!confirm("Delete this movement check" + (vkey ? " and its video" : "") + "?")) return;
+  appConfirm("Delete this movement check" + (vkey ? " and its video" : "") + "?", ()=>{
   if (chkId) c.moveChecks = (c.moveChecks||[]).filter(k=>k.id!==chkId);
   if (vkey && S.syncUrl && S.syncKey){
     fetch(`${S.syncUrl.replace(/\/+$/,"")}/video-del?key=${encodeURIComponent(S.syncKey)}&k=${encodeURIComponent(vkey)}`).catch(()=>{});
     vidCache[c.id] = (vidCache[c.id]||[]).filter(v=>v.k!==vkey);
   }
   save(); render(); toast("Deleted");
+  }, {yes:"Delete", danger:true});
 }
 function mvPin(c, vkey){
   const v = (vidCache[c.id]||[]).find(x=>x.k===vkey); if (!v) return;
@@ -1484,7 +1486,7 @@ function mvPin(c, vkey){
 
 function clientView(){
   const c = client(); if(!c){ view.page="roster"; return rosterView(); }
-  const tabs = [["fatigue","Fatigue"],["injuries","Injuries"],["recovery","Recovery"],["log","Log"],["brief","Brief"],["charts","Charts"],["moves","Moves"],["history","History"],["notes","Notes"]]
+  const tabs = [["brief","Brief"],["log","Log"],["fatigue","Fatigue"],["injuries","Injuries"],["charts","Charts"],["moves","Moves"],["recovery","Recovery"],["history","History"],["notes","Notes"]]
     .map(([k,l])=>`<button class="tab ${view.tab===k?"on":""}" data-tab="${k}">${l}</button>`).join("");
   return `<header><button class="backlink" data-act="back">‹ Roster</button>
     <div class="word" style="margin-left:6px"><b>${esc(c.name)}</b></div>
@@ -1537,7 +1539,7 @@ function readyRing(c){
         stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" transform="rotate(-90 24 24)"/>
       <text x="24" y="28" text-anchor="middle" fill="${col}" font-size="15" font-weight="800">${r.score}</text></svg>
     <div style="font-size:9px;letter-spacing:1px;color:#8b93a5">READY</div>
-    <div style="font-size:9px;font-weight:800;color:${col}">${readyWord(r.score)}${r.stale?" (old)":""}</div>
+    <div style="font-size:9px;font-weight:800;color:${col}">${readyWord(r.score)}${r.stale?" · stale":""}</div>
   </div>`;
 }
 
@@ -1644,16 +1646,19 @@ function draftItemHtml(it, i){
     it.setDetail = Array.from({length:Math.max(1, it.sets||3)}, (_,j)=>({reps:times[j]||times[0]||"", weight:null}));
     normalizeItem(it);
   }
+  const expanded = _chipEx.has(i);
+  const mod = (active, html) => (active || expanded) ? html : "";
   const chips = ["warmup","moderate","heavy","max"].map(k=>
     `<span class="ichip ${it.intensity===k?"on":""}" data-int="${i}:${k}">${k}</span>`).join("")
-    + `<span class="ichip ${it.bw?"on":""}" data-bwtoggle="${i}" style="${it.bw?"":"opacity:.75"}">BW</span>`
-    + `<span class="ichip ${it.side==="L"?"on":""}" data-sideto="${i}:L" style="${it.side==="L"?"":"opacity:.75"}">L</span>`
-    + `<span class="ichip ${it.side==="R"?"on":""}" data-sideto="${i}:R" style="${it.side==="R"?"":"opacity:.75"}">R</span>`
-    + ((it.band!==undefined||it.dist||it.dur)?``:`<span class="ichip ${it.pow?"on":""}" data-powtoggle="${i}" style="${it.pow?"":"opacity:.75"}" title="Power/speed work — light load moved fast. Charts separately, never touches strength e1RM; systemic load ×1.25">power</span>`)
-    + ((it.band!==undefined||it.dist||it.dur)?``:`<span class="ichip ${it.ecc?"on":""}" data-ecctoggle="${i}" style="${it.ecc?"":"opacity:.75"}" title="Eccentric-emphasis (negatives, tempo, nordics) — biggest soreness driver, fatigue ×1.25">ecc</span>`)
-    + ((it.band!==undefined||it.dist)?``:`<span class="ichip ${it.hold?"on":""}" data-holdtoggle="${i}" style="${it.hold?"":"opacity:.75"}">⏱ hold</span>`)
-    + ((it.setDetail||it.hold)?``:`<span class="ichip ${it.dur?"on":""}" data-durtoggle="${i}" style="${it.dur?"":"opacity:.75"}">⏱ cardio</span>`)
-    + (it.setDetail?``:`<span class="ichip ${it.band!==undefined?"on":""}" data-bandtoggle="${i}" style="${it.band!==undefined?"":"opacity:.75"}">band</span>`);
+    + mod(it.bw, `<span class="ichip ${it.bw?"on":""}" data-bwtoggle="${i}" style="${it.bw?"":"opacity:.75"}">BW</span>`)
+    + mod(it.side==="L", `<span class="ichip ${it.side==="L"?"on":""}" data-sideto="${i}:L" style="${it.side==="L"?"":"opacity:.75"}">L</span>`)
+    + mod(it.side==="R", `<span class="ichip ${it.side==="R"?"on":""}" data-sideto="${i}:R" style="${it.side==="R"?"":"opacity:.75"}">R</span>`)
+    + ((it.band!==undefined||it.dist||it.dur)?``:mod(it.pow, `<span class="ichip ${it.pow?"on":""}" data-powtoggle="${i}" style="${it.pow?"":"opacity:.75"}" title="Power/speed work — light load moved fast. Charts separately, never touches strength e1RM; systemic load ×1.25">power</span>`))
+    + ((it.band!==undefined||it.dist||it.dur)?``:mod(it.ecc, `<span class="ichip ${it.ecc?"on":""}" data-ecctoggle="${i}" style="${it.ecc?"":"opacity:.75"}" title="Eccentric-emphasis (negatives, tempo, nordics) — biggest soreness driver, fatigue ×1.25">ecc</span>`))
+    + ((it.band!==undefined||it.dist)?``:mod(it.hold, `<span class="ichip ${it.hold?"on":""}" data-holdtoggle="${i}" style="${it.hold?"":"opacity:.75"}">⏱ hold</span>`))
+    + ((it.setDetail||it.hold)?``:mod(!!it.dur, `<span class="ichip ${it.dur?"on":""}" data-durtoggle="${i}" style="${it.dur?"":"opacity:.75"}">⏱ cardio</span>`))
+    + (it.setDetail?``:mod(it.band!==undefined, `<span class="ichip ${it.band!==undefined?"on":""}" data-bandtoggle="${i}" style="${it.band!==undefined?"":"opacity:.75"}">band</span>`))
+    + `<span class="ichip" data-chipex="${i}" style="opacity:.6" title="${expanded?"Fewer options":"BW, side, power, eccentric, hold, cardio, band"}">${expanded?"−":"+"}</span>`;
   let body;
   if (it.unmatched){
     body = `<div class="minirow"><button class="btn-sm" data-assign="${i}">Assign muscles →</button></div>`;
@@ -1663,7 +1668,7 @@ function draftItemHtml(it, i){
       ${it.hold?`<span class="lbl" style="width:36px;color:var(--ice)">hold</span><input type="text" inputmode="decimal" style="width:92px" value="${esc(sd.reps||"")}" data-sdr="${i}:${j}" placeholder="e.g. 45s">`:`${it.bw?`<span class="lbl" style="width:72px;color:var(--ice)">BW</span>`:`<input type="number" inputmode="decimal" style="width:72px" value="${sd.weight??""}" data-sdw="${i}:${j}" placeholder="lbs">`}
       <span class="lbl">×</span>
       <input type="text" style="width:52px${!it.bw&&sd.weight!=null&&!sd.reps?";border-color:#c95f5f":""}" value="${esc(sd.reps||"")}" data-sdr="${i}:${j}" placeholder="reps?">`}
-      <select data-sdi="${i}:${j}" style="width:86px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:${sd.intensity?"var(--text)":"var(--dim)"};font-size:12px;padding:6px 4px">
+      <select data-sdi="${i}:${j}" style="width:104px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:${sd.intensity?"var(--text)":"var(--dim)"};font-size:12px;padding:6px 4px">
         <option value="" ${!sd.intensity?"selected":""}>↳ ${esc(it.intensity)}</option>
         ${["warmup","moderate","heavy","max"].map(k=>`<option value="${k}" ${sd.intensity===k?"selected":""}>${k}</option>`).join("")}
       </select>
@@ -2251,7 +2256,8 @@ function chartSvg(pts, exName){
     out += `<circle cx="${x}" cy="${y}" r="4.5" fill="#A8C4E0" stroke="#0A0E18" stroke-width="1.5"><title>${detail}</title></circle>`;
     if (exName) out += `<circle cx="${x}" cy="${y}" r="13" fill="transparent" style="cursor:pointer" data-cpt="${esc(exName)}|${p.date}"><title>${detail}</title></circle>`;
     const lx = Math.min(Math.max(x, L+20), W-R-22);
-    out += `<text x="${lx}" y="${y-9}" text-anchor="middle" fill="#CFD3DC" font-size="11" font-weight="700">${p.pw?(p.r?`${p.w}×${p.r}`:p.w):p.du?`${p.e1} ${p.unit||"min"}`:p.bw?`${p.r} reps`:(p.r?`${p.w}×${p.r}`:p.w)}</text>`;
+    const _showLbl = pts.length <= 12 || i === 0 || i === pts.length - 1 || p.e1 === Math.max(...pts.map(q=>q.e1));
+    if (_showLbl) out += `<text x="${lx}" y="${y-9}" text-anchor="middle" fill="#CFD3DC" font-size="11" font-weight="700">${p.pw?(p.r?`${p.w}×${p.r}`:p.w):p.du?`${p.e1} ${p.unit||"min"}`:p.bw?`${p.r} reps`:(p.r?`${p.w}×${p.r}`:p.w)}</text>`;
     const d = new Date(p.date+"T00:00:00");
     const lbl = (d.getMonth()+1)+"/"+d.getDate();
     if (pts.length <= 8 || i === 0 || i === pts.length-1 || i % Math.ceil(pts.length/6) === 0)
@@ -2306,9 +2312,10 @@ function chartPointModal(c, name, date){
     const s = c.sessions[h.si];
     if (b.dataset.cpa === "del"){
       const lastOne = s.exercises.length === 1;
-      if (!confirm(`Delete ${name} from "${s.title||"Session"}" (${fmtDate(date)})?${lastOne?"\nIt's the only exercise — the whole session will be removed.":""}`)) return;
-      deleteChartEntry(c, name, date, k);
-      wrap.remove(); render(); toast("Entry deleted — fatigue, PRs and charts recalculated");
+      appConfirm(`Delete ${name} from "${s.title||"Session"}" (${fmtDate(date)})?${lastOne?"\nIt's the only exercise — the whole session will be removed.":""}`, ()=>{
+        deleteChartEntry(c, name, date, k);
+        wrap.remove(); render(); toast("Entry deleted — fatigue, PRs and charts recalculated");
+      }, {yes:"Delete", danger:true});
     } else {
       draft = s.exercises.map(x=>{ const m = exMuscles(x.name); return { ...x, primary:m.p, secondary:m.s }; });
       draftDate = s.date; draftTitle = s.title || "";
@@ -2633,6 +2640,7 @@ function pickerModal(){
 
 /* ---------------- Actions ---------------- */
 function parseText(){
+  _chipEx.clear();
   const t = $("#logtext").value.trim(); if(!t) return;
   const { parsed, unmatched } = E.parseSession(t, S.customExercises);
   for (const p of parsed){ draft.push(p); if (duoPartnerId) duoDraftB.push(JSON.parse(JSON.stringify(p))); }
@@ -2862,8 +2870,8 @@ function summaryModal(list){
     if (ev.target===wrap || ev.target.id==="sumDone"){ wrap.remove(); return; }
     if (ev.target.id==="sumCopy"){
       const txt = list.map(recapText).join("\n\n————\n\n");
-      if (navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast("Recap copied — paste it into a text")).catch(()=>prompt("Copy this:", txt));
-      else prompt("Copy this:", txt);
+      if (navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast("Recap copied — paste it into a text")).catch(()=>appCopy("Copy this recap:", txt));
+      else appCopy("Copy this recap:", txt);
     }
   });
 }
@@ -2937,7 +2945,7 @@ function importJSON(file){
   r.onload = () => { try {
     const d = JSON.parse(r.result);
     if (!d.clients) throw 0;
-    S = d; save(); view={page:"roster",clientId:null,tab:"fatigue"}; render(); toast("Backup restored");
+    S = d; save(); view={page:"roster",clientId:null,tab:"brief"}; render(); toast("Backup restored");
   } catch(e){ toast("That file doesn't look like a Spotter backup"); } };
   r.readAsText(file);
 }
@@ -2950,10 +2958,13 @@ function settingsMenu(){
     <button class="btn2" style="width:100%;margin-top:8px" id="mImport">Import backup</button>
     <input type="file" id="mFile" accept=".json" style="display:none">
     <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
-      <h2 style="margin:0 0 8px">Sync server (client logs · backup · WHOOP)</h2>
-      <input type="text" id="mSyncUrl" placeholder="Worker URL e.g. https://dwil-whoop-sync.you.workers.dev" value="${esc(S.syncUrl||"")}" style="margin-bottom:8px">
-      <input type="text" id="mSyncKey" placeholder="APP_KEY (same as in Cloudflare)" value="${esc(S.syncKey||"")}">
-      <button class="btn2" style="width:100%;margin-top:8px" id="mSyncSave">Save sync settings</button>
+      <details${S.syncUrl&&S.syncKey?"":" open"}>
+        <summary style="cursor:pointer;font-size:13px;font-weight:800;color:var(--ice)">Advanced — sync server ${S.syncUrl&&S.syncKey?`<span style="color:#7dc98f;font-weight:400;font-size:11px">connected ✓</span>`:`<span style="color:#d4a04d;font-weight:400;font-size:11px">not set up</span>`}</summary>
+        <div class="muted" style="font-size:11px;margin:8px 0 6px">Powers client links, cloud backup and morning reviews. You set this once — no need to touch it again.</div>
+        <input type="text" id="mSyncUrl" placeholder="Worker URL e.g. https://dwil-whoop-sync.you.workers.dev" value="${esc(S.syncUrl||"")}" style="margin-bottom:8px">
+        <input type="text" id="mSyncKey" placeholder="APP_KEY (same as in Cloudflare)" value="${esc(S.syncKey||"")}">
+        <button class="btn2" style="width:100%;margin-top:8px" id="mSyncSave">Save sync settings</button>
+      </details>
     </div>
     <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
       <h2 style="margin:0 0 8px">Cloud backup</h2>
@@ -2974,7 +2985,7 @@ function settingsMenu(){
     if (e.target.id==="mSyncSave"){ S.syncUrl = wrap.querySelector("#mSyncUrl").value.trim(); S.syncKey = wrap.querySelector("#mSyncKey").value.trim(); save(); syncExLib(); autoBackup(true); toast("Sync settings saved"); }
     if (e.target.id==="mBackupNow") autoBackup(true);
     if (e.target.id==="mRestore"){ wrap.remove(); restoreBackup(); }
-    if (e.target.id==="mReset" && confirm("Replace ALL data with the original seed? Export first if unsure.")){ S=seedState(); save(); wrap.remove(); render(); }
+    if (e.target.id==="mReset") appConfirm("Replace ALL data with the original seed? Export first if unsure.", ()=>{ S=seedState(); save(); wrap.remove(); render(); }, {yes:"Replace", danger:true});
   });
   wrap.querySelector("#mFile").addEventListener("change", e=>{ if(e.target.files[0]){ importJSON(e.target.files[0]); wrap.remove(); } });
 }
@@ -3027,18 +3038,18 @@ function clientMenu(){
   document.body.appendChild(wrap);
   wrap.addEventListener("click", ev=>{
     if (ev.target===wrap) wrap.remove();
-    if (ev.target.id==="cmProfile"){ const p = prompt("Profile / goals / injury notes:", c.profile||""); if (p!==null){ c.profile=p.trim(); save(); render(); } wrap.remove(); }
+    if (ev.target.id==="cmProfile"){ wrap.remove(); appPrompt("Profile / goals / injury notes:", c.profile||"", p=>{ c.profile=p.trim(); save(); render(); }, {multiline:true}); }
     if (ev.target.id==="cmTrain"){ const cur = c.trainStart || "";
-      const v = prompt("Training since (year, e.g. 2015 — rough guess is fine; blank to clear):", cur);
-      if (v !== null){ const t = v.trim(); if (!t){ delete c.trainStart; } else if (/^\d{4}(-\d{2}(-\d{2})?)?$/.test(t)){ c.trainStart = t; } else { toast("Use a year like 2015"); wrap.remove(); return; }
-        save(); render(); toast(t?`Training age set — fatigue model now expects a ${Math.round(trainingYears(c))}-year-adapted system`:"Training age cleared"); }
-      wrap.remove(); }
+      wrap.remove();
+      appPrompt("Training since (year, e.g. 2015 — rough guess is fine; blank to clear):", cur, v=>{
+        const t = v.trim(); if (!t){ delete c.trainStart; } else if (/^\d{4}(-\d{2}(-\d{2})?)?$/.test(t)){ c.trainStart = t; } else { toast("Use a year like 2015"); return; }
+        save(); render(); toast(t?`Training age set — fatigue model now expects a ${Math.round(trainingYears(c))}-year-adapted system`:"Training age cleared"); }); }
     if (ev.target.id==="cmPhoto"){ c.photoLog=c.photoLog||[]; if (!c.photoLog.includes(todayISO())){ c.photoLog.push(todayISO()); c.photoLog.sort(); save(); render(); toast("Progress photos logged for today"); } else toast("Already logged today"); wrap.remove(); }
     if (ev.target.id==="cmPay"){ wrap.remove(); payMenu(c); }
-    if (ev.target.id==="cmRename"){ const n = prompt("New name:", c.name); if (n && n.trim()){ c.name=n.trim(); save(); render(); } wrap.remove(); }
-    if (ev.target.id==="cmLogLink"){ const l = clientLogLink(c); if (l){ if (navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Solo-log link copied — text it to "+c.name)).catch(()=>prompt("Send this to "+c.name+":", l)); else prompt("Send this to "+c.name+":", l); } wrap.remove(); }
-    if (ev.target.id==="cmDelete"){ if (confirm(`Delete ${c.name} and ALL their data? This cannot be undone. Export a backup first if unsure.`)){
-      S.clients = S.clients.filter(x=>x.id!==c.id); save(); view={page:"roster",clientId:null,tab:"fatigue"}; render(); toast("Client deleted"); } wrap.remove(); }
+    if (ev.target.id==="cmRename"){ wrap.remove(); appPrompt("New name:", c.name, n=>{ if (n.trim()){ c.name=n.trim(); save(); render(); } }); }
+    if (ev.target.id==="cmLogLink"){ const l = clientLogLink(c); if (l){ if (navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Solo-log link copied — text it to "+c.name)).catch(()=>appCopy("Send this to "+c.name+":", l)); else appCopy("Send this to "+c.name+":", l); } wrap.remove(); }
+    if (ev.target.id==="cmDelete"){ wrap.remove(); appConfirm(`Delete ${c.name} and ALL their data? This cannot be undone. Export a backup first if unsure.`, ()=>{
+      S.clients = S.clients.filter(x=>x.id!==c.id); save(); view={page:"roster",clientId:null,tab:"brief"}; render(); toast("Client deleted"); }, {yes:"Delete", danger:true}); }
   });
 }
 
@@ -3120,11 +3131,16 @@ function approveSub(idx){
     if (!injs.length){ toast("No active injury to attach to — log it first"); return; }
     let inj = injs[0];
     if (injs.length > 1){
-      const pick = prompt("Attach to which injury?\n" + injs.map((x,n)=>`${n+1}) ${x.label}`).join("\n"), "1");
-      const n = parseInt(pick||"", 10);
-      if (!n || n < 1 || n > injs.length) return;
-      inj = injs[n-1];
+      appPrompt("Attach to which injury? Enter the number:\n" + injs.map((x,n)=>`${n+1}) ${x.label}`).join("\n"), "1", pick=>{
+        const n = parseInt(pick||"", 10);
+        if (!n || n < 1 || n > injs.length){ toast("Enter a number from the list"); return; }
+        attachTo(injs[n-1]);
+      }, {yes:"Attach"});
+      return;
     }
+    attachTo(inj);
+    return;
+    function attachTo(inj){
     const num = rx => { const m = s.text.match(rx); return m ? Math.max(0, Math.min(10, +m[1])) : null; };
     const nw = num(/now\s*(\d+)/i), bb = num(/best\s*(\d+)/i), ww = num(/worst\s*(\d+)/i);
     if (nw == null && bb == null && ww == null){ toast("No pain numbers found in that check-in"); return; }
@@ -3136,7 +3152,8 @@ function approveSub(idx){
     inj.checkIns = inj.checkIns || []; inj.checkIns.push(entry);
     inj.checkIns.sort((a,b)=>a.date.localeCompare(b.date));
     const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
-    ackSub(sid); render(); toast(`Check-in attached to ${inj.label}`); return;
+    ackSub(sid); render(); toast(`Check-in attached to ${inj.label}`);
+    }
   }
   if (s.kind === "video"){
     const m = /^(.*?)(?:\s*\((L|R)\))?$/.exec(s.title || "movement");
@@ -3177,10 +3194,10 @@ function approveSub(idx){
 }
 function rejectSub(idx){
   const s = pendingSubs[idx]; if (!s) return;
-  if (confirm("Reject and delete this submission?")){
+  appConfirm("Reject and delete this submission?", ()=>{
     if (s.kind==="video" && s.vkey && S.syncUrl && S.syncKey)
       fetch(`${S.syncUrl.replace(/\/+$/,"")}/video-del?key=${encodeURIComponent(S.syncKey)}&k=${encodeURIComponent(s.vkey)}`).catch(()=>{});
-    const sid=s.id; pendingSubs=pendingSubs.filter(x=>x!==s); ackSub(sid); render(); toast("Rejected"); }
+    const sid=s.id; pendingSubs=pendingSubs.filter(x=>x!==s); ackSub(sid); render(); toast("Rejected"); }, {yes:"Reject", danger:true});
 }
 
 function autoBackup(force){
@@ -3203,8 +3220,9 @@ function restoreBackup(){
     .then(r=>r.json()).then(d=>{
       if (!d || d.error || !d.state){ toast("No cloud backup found yet"); return; }
       const when = String(d.saved||"").replace("T"," ").slice(0,16);
-      if (!confirm(`Replace ALL data on this device with the cloud backup from ${when}?`)) return;
-      S = d.state; store.setItem(LS_KEY, JSON.stringify(S)); render(); toast("Restored from cloud backup");
+      appConfirm(`Replace ALL data on this device with the cloud backup from ${when}?`, ()=>{
+        S = d.state; store.setItem(LS_KEY, JSON.stringify(S)); render(); toast("Restored from cloud backup"); }, {yes:"Restore", danger:true});
+      return;
     }).catch(()=>toast("Could not reach the backup server"));
 }
 
@@ -3244,6 +3262,59 @@ function saveRecovery(){
   save(); render();
   const r = Recovery.readiness(c.recovery, curSys(c));
   toast(r && r.score!=null ? `Saved. Readiness ${r.score}/100 (${readyWord(r.score)}).` : "Entry saved.");
+}
+
+/* ---- branded dialogs (replace native confirm/prompt; .auto hooks for headless tests) ---- */
+function appConfirm(msg, onYes, opts){
+  if (appConfirm.auto != null){ const v = typeof appConfirm.auto === "function" ? appConfirm.auto(msg) : appConfirm.auto; if (v) onYes(); return; }
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  wrap.innerHTML = `<div class="modal" style="max-width:340px">
+    <div style="font-size:14px;line-height:1.55;white-space:pre-line">${esc(msg)}</div>
+    <div class="row" style="gap:8px;margin-top:14px">
+      <button class="btn2 grow" id="acNo">Cancel</button>
+      <button class="btn grow" id="acYes"${opts&&opts.danger?' style="background:#8a3b3b"':''}>${esc((opts&&opts.yes)||"Confirm")}</button></div></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", ev=>{
+    if (ev.target===wrap || ev.target.id==="acNo"){ wrap.remove(); return; }
+    if (ev.target.id==="acYes"){ wrap.remove(); onYes(); }
+  });
+}
+function appPrompt(msg, def, onSubmit, opts){
+  if (appPrompt.auto !== undefined){ const v = typeof appPrompt.auto==="function" ? appPrompt.auto(msg) : appPrompt.auto; if (v!=null) onSubmit(String(v)); return; }
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  wrap.innerHTML = `<div class="modal" style="max-width:360px">
+    <div style="font-size:14px;line-height:1.55;white-space:pre-line">${esc(msg)}</div>
+    ${opts&&opts.multiline?`<textarea id="apVal" style="width:100%;margin-top:10px;min-height:72px">${esc(def||"")}</textarea>`:`<input type="text" id="apVal" value="${esc(def||"")}" style="width:100%;margin-top:10px">`}
+    <div class="row" style="gap:8px;margin-top:12px">
+      <button class="btn2 grow" id="apNo">Cancel</button>
+      <button class="btn grow" id="apYes">${esc((opts&&opts.yes)||"Save")}</button></div></div>`;
+  document.body.appendChild(wrap);
+  const inp = wrap.querySelector("#apVal");
+  setTimeout(()=>{ if (inp && inp.focus) inp.focus(); }, 50);
+  if (inp && inp.addEventListener) inp.addEventListener("keydown", ev=>{ if (ev.key==="Enter" && !(opts&&opts.multiline)){ const v=inp.value; wrap.remove(); onSubmit(v); } });
+  wrap.addEventListener("click", ev=>{
+    if (ev.target===wrap || ev.target.id==="apNo"){ wrap.remove(); return; }
+    if (ev.target.id==="apYes"){ const v = inp.value; wrap.remove(); onSubmit(v); }
+  });
+}
+function appCopy(label, text){
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  wrap.innerHTML = `<div class="modal" style="max-width:380px">
+    <div style="font-size:14px">${esc(label)}</div>
+    <textarea id="acpVal" readonly style="width:100%;margin-top:10px;min-height:90px;font-size:12px">${esc(text)}</textarea>
+    <div class="row" style="gap:8px;margin-top:12px">
+      <button class="btn2 grow" id="acpClose">Close</button>
+      <button class="btn grow" id="acpCopy">Copy</button></div></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", ev=>{
+    if (ev.target===wrap || ev.target.id==="acpClose"){ wrap.remove(); return; }
+    if (ev.target.id==="acpCopy"){ const ta = wrap.querySelector("#acpVal"); ta.select && ta.select();
+      try { document.execCommand("copy"); toast("Copied"); } catch(e){}
+    }
+  });
 }
 
 const EXP_OPTS = [
@@ -3309,7 +3380,7 @@ function addClient(){
       } else if (payType === "monthly"){ c.pay = { type:"monthly" }; }
       S.clients.push(c);
       save(); wrap.remove();
-      view = { page:"client", clientId:id, tab:"fatigue" };
+      view = { page:"client", clientId:id, tab:"brief" };
       render(); toast(`${name} added${opt?` — ${opt[1].toLowerCase()}${opt[0]==="never"?" (soreness model fully trusted from day one)":""}`:""}`);
     }
   });
@@ -3319,10 +3390,11 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-holdtoggle],[data-ecctoggle],[data-powtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injflag],[data-rfnone],[data-rfsome],[data-rfclear],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject],[data-mvplay],[data-mvscore],[data-mvadopt],[data-mvpin],[data-mvdel],[data-mvcompare],[data-cpt]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-holdtoggle],[data-ecctoggle],[data-powtoggle],[data-chipex],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injflag],[data-rfnone],[data-rfsome],[data-rfclear],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject],[data-mvplay],[data-mvscore],[data-mvadopt],[data-mvpin],[data-mvdel],[data-mvcompare],[data-cpt]");
     if (!t) return;
     const ds = t.dataset;
-    if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
+    if (ds.open){ const go = ()=>{ view={page:"client",clientId:ds.open,tab:"brief"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); };
+      if (draft.length||duoDraftB.length||draftText.trim()) appConfirm("Discard the unsaved session draft?", go, {yes:"Discard", danger:true}); else go(); }
     else if (ds.bmv){ toast(ds.bmv); }
     else if (ds.cpt){ const ix = ds.cpt.lastIndexOf("|"); chartPointModal(client(), ds.cpt.slice(0,ix), ds.cpt.slice(ix+1)); }
     else if (ds.crange){ chartRange = ds.crange; render(); }
@@ -3342,14 +3414,13 @@ function bind(){
     else if (ds.rfnone){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.rfnone); if(!inj) return;
       inj.redFlags = []; save(); render(); toast("Screen recorded — none present"); }
     else if (ds.rfsome){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.rfsome); if(!inj) return;
-      const pick = prompt("Which flags? Enter numbers, comma-separated:\n" + RED_FLAGS.map((f,n)=>`${n+1}) ${f.label}`).join("\n"));
-      if (pick === null) return;
-      const ks = pick.split(/[,\s]+/).map(x=>RED_FLAGS[parseInt(x,10)-1]).filter(Boolean).map(f=>f.k);
-      if (!ks.length){ toast("No valid selections"); return; }
-      inj.redFlags = ks; delete inj.rfCleared; save(); render(); toast("Red flags recorded — refer for medical evaluation"); }
+      appPrompt("Which flags? Enter numbers, comma-separated:\n" + RED_FLAGS.map((f,n)=>`${n+1}) ${f.label}`).join("\n"), "", pick=>{
+        const ks = pick.split(/[,\s]+/).map(x=>RED_FLAGS[parseInt(x,10)-1]).filter(Boolean).map(f=>f.k);
+        if (!ks.length){ toast("No valid selections"); return; }
+        inj.redFlags = ks; delete inj.rfCleared; save(); render(); toast("Red flags recorded — refer for medical evaluation"); }, {yes:"Record"}); }
     else if (ds.rfclear){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.rfclear); if(!inj) return;
-      if (confirm("Confirm: this has been medically evaluated and cleared for continued training?")){
-        inj.rfCleared = todayISO(); save(); render(); toast("Marked medically cleared — index restored"); } }
+      appConfirm("Confirm: this has been medically evaluated and cleared for continued training?", ()=>{
+        inj.rfCleared = todayISO(); save(); render(); toast("Marked medically cleared — index restored"); }, {yes:"Confirm"}); }
     else if (ds.testlog){ const [iid, ti] = ds.testlog.split(":"); const c=client(); const inj=c.injuries.find(x=>x.id===iid); if(!inj) return;
       const t = (inj.tests||[])[+ti]; if (!t) return;
       const v = $("#tv-"+iid+"-"+ti).value; if (v===""){ toast("Enter a value first"); return; }
@@ -3362,12 +3433,12 @@ function bind(){
       inj.tests = inj.tests||[]; inj.tests.push({ name, unit, target, entries:[] });
       save(); render(); toast("Test added"); }
     else if (ds.testdel){ const [iid, ti] = ds.testdel.split(":"); const c=client(); const inj=c.injuries.find(x=>x.id===iid); if(!inj) return;
-      if (confirm("Remove this test and its history?")){ inj.tests.splice(+ti,1); save(); render(); } }
+      appConfirm("Remove this test and its history?", ()=>{ inj.tests.splice(+ti,1); save(); render(); }, {yes:"Remove", danger:true}); }
     else if (ds.psfs){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.psfs); if(!inj) return;
-      const act = prompt("PSFS — an activity that matters to THEM (e.g. carrying groceries, surfing, sitting through a movie):");
-      if (!act || !act.trim()) return;
-      inj.tests = inj.tests||[]; inj.tests.push({ name: "PSFS: " + act.trim(), unit: "/10", target: 8, entries: [] });
-      save(); render(); toast("PSFS activity added — client rates 0-10 ability, target 8+"); }
+      appPrompt("PSFS — an activity that matters to THEM (e.g. carrying groceries, surfing, sitting through a movie):", "", act=>{
+        if (!act.trim()) return;
+        inj.tests = inj.tests||[]; inj.tests.push({ name: "PSFS: " + act.trim(), unit: "/10", target: 8, entries: [] });
+        save(); render(); toast("PSFS activity added — client rates 0-10 ability, target 8+"); }, {yes:"Add"}); }
     else if (ds.cpg){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.cpg); if(!inj) return;
       const bat = cpgFor(inj); if (!bat) return;
       inj.tests = inj.tests||[];
@@ -3380,8 +3451,8 @@ function bind(){
       save(); render(); toast("Note saved"); }
     else if (ds.injcopy){ const c=client(); const inj=c.injuries.find(x=>x.id===ds.injcopy); if(!inj) return;
       const txt = clinicalSummary(c, inj);
-      if (typeof navigator!=="undefined" && navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast("Clinical summary copied — paste it to Claude")).catch(()=>prompt("Copy this summary:", txt));
-      else prompt("Copy this summary:", txt); }
+      if (typeof navigator!=="undefined" && navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast("Clinical summary copied — paste it to Claude")).catch(()=>appCopy("Copy this clinical summary:", txt));
+      else appCopy("Copy this clinical summary:", txt); }
     else if (ds.injci){ const c=client(); const i=c.injuries.find(x=>x.id===ds.injci); if(!i) return;
       const pv = $("#pain-"+ds.injci).value, bv = $("#painb-"+ds.injci).value, wv = $("#painw-"+ds.injci).value, nv = $("#cinote-"+ds.injci).value.trim();
       if (pv==="" && wv==="" && bv===""){ toast("Enter at least one pain score 0–10"); return; }
@@ -3397,9 +3468,9 @@ function bind(){
       i.checkIns = i.checkIns||[]; i.checkIns.push(entry);
       save(); render(); toast("Check-in saved"); }
     else if (ds.injclear){ const c=client(); const i=c.injuries.find(x=>x.id===ds.injclear); if(!i) return;
-      if (confirm(`Mark "${i.label}" as cleared?`)){ i.status="cleared"; i.clearedDate=todayISO(); save(); render(); toast("Cleared — moved to history"); } }
+      appConfirm(`Mark "${i.label}" as cleared?`, ()=>{ i.status="cleared"; i.clearedDate=todayISO(); save(); render(); toast("Cleared — moved to history"); }, {yes:"Mark cleared"}); }
     else if (ds.injdel){ const c=client();
-      if (confirm("Delete this injury record entirely?")){ c.injuries = c.injuries.filter(x=>x.id!==ds.injdel); save(); render(); } }
+      appConfirm("Delete this injury record entirely?", ()=>{ c.injuries = c.injuries.filter(x=>x.id!==ds.injdel); save(); render(); }, {yes:"Delete", danger:true}); }
     else if (ds.delrec!==undefined && ds.delrec!==""){ const c=client(); const s=[...c.recovery].sort((a,b)=>a.date.localeCompare(b.date)); const tgt=s[+ds.delrec]; c.recovery=c.recovery.filter(x=>x!==tgt); save(); render(); toast("Entry deleted"); }
     else if (ds.editsess!==undefined && ds.editsess!==""){ const c=client(); const s=c.sessions[+ds.editsess];
       if (s && s.exercises){
@@ -3409,8 +3480,8 @@ function bind(){
         view.tab = "log"; render(); toast("Session loaded into the draft — fix it and save");
       } }
     else if (ds.delsess!==undefined && ds.delsess!==""){ const c=client();
-      if (confirm("Delete this session? Fatigue and PRs will be recalculated.")){
-        c.sessions.splice(+ds.delsess,1); rebuildClient(c); save(); render(); toast("Session deleted"); } }
+      appConfirm("Delete this session? Fatigue and PRs will be recalculated.", ()=>{
+        c.sessions.splice(+ds.delsess,1); rebuildClient(c); save(); render(); toast("Session deleted"); }, {yes:"Delete", danger:true}); }
     else if (ds.bm){ const [m,v]=ds.bm.split(":"); toast(`${m}: ${v} / 10`); }
     else if (ds.tab){ view.tab=ds.tab; render(); }
     else if (ds.duoside){ duoActive = ds.duoside; render(); }
@@ -3418,6 +3489,7 @@ function bind(){
       if (it.band !== undefined) delete it.band;
       else { it.band = ""; it.weight = null; delete it.dur; delete it.dist; }
       persistDraft(); render(); }
+    else if (ds.chipex!==undefined && ds.chipex!==""){ const k=+ds.chipex; _chipEx.has(k)?_chipEx.delete(k):_chipEx.add(k); render(); }
     else if (ds.powtoggle!==undefined && ds.powtoggle!==""){ const it = activeDraft()[+ds.powtoggle];
       it.pow = !it.pow;
       persistDraft(); render(); }
@@ -3465,7 +3537,8 @@ function bind(){
     else if (ds.close && e.target.classList.contains("modal-bg")){ assignTarget=null; pickerOpen=false; render(); }
     else if (ds.act){
       const a=ds.act;
-      if (a==="back"){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); view={page:"roster",clientId:null,tab:"fatigue"}; render(); }
+      if (a==="back"){ const go = ()=>{ draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); view={page:"roster",clientId:null,tab:"brief"}; render(); };
+        if (draft.length||duoDraftB.length||draftText.trim()) appConfirm("Discard the unsaved session draft?", go, {yes:"Discard", danger:true}); else go(); }
       else if (a==="parse") parseText();
       else if (a==="picker"){ pickerOpen=true; render(); setTimeout(()=>$("#picksearch")?.focus(),50); }
       else if (a==="new-exercise"){ pickerOpen=false; assignTarget=-1; assignSel={}; view.tab="log"; render(); }
@@ -3504,8 +3577,8 @@ function bind(){
         injSel={}; injScreen={}; injForm = { type:"strain", grade:"?", chronic:false, label:"", onset:null, lo:null, hi:null, side:null };
         save(); render(); toast(rf.length?`${label} logged with RED FLAGS — refer for medical evaluation`:wasChronic?`${label} logged — chronic tracking is on`:`${label} logged — it now shows on the body map and brief`); }
       else if (a==="whoop-link"){ const l = whoopConnectLink(client());
-        if (l && typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Connect link copied — text it to the client")).catch(()=>prompt("Send this link to the client:", l));
-        else if (l) prompt("Send this link to the client:", l); }
+        if (l && typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Connect link copied — text it to the client")).catch(()=>appCopy("Send this link to the client:", l));
+        else if (l) appCopy("Send this link to the client:", l); }
     }
   };
   app.oninput = e => {
