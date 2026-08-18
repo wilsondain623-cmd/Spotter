@@ -71,6 +71,13 @@ function eccOf(seg, isCardio){
   return false;
 }
 
+/* power/speed (dynamic-effort) work: light load, maximal bar speed. "power" alone
+   counts unless it's part of an exercise name like power clean (library flags those). */
+function powOf(seg){
+  return /\b(speed work|dynamic effort|explosive|bar speed|speed (bench|squat|deadlifts?|dead|press|pulls?|rows?))\b/i.test(seg)
+    || /\bpower\b(?!\s*(clean|snatch))/i.test(seg);
+}
+
 const DECAY_RATE = 0.78;   // per day (default: chest, lats, mid-back)
 /* small muscles recover faster; big lower-body slower */
 const DECAY_BY_MUSCLE = {
@@ -162,6 +169,8 @@ const EXERCISE_LIBRARY = [
   { name: "Rowing", aliases: ["rowing","row erg","erg","rower"], p: ["mid-back","quads"], s: ["lats","hamstrings","biceps","core","forearms-grip"], sys: 1.6 },
   { name: "Jump Rope", aliases: ["jump rope","jump-rope","jumping rope"], p: ["calves"], s: ["quads","core","forearms-grip"], sys: 1.6 },
   { name: "Box Jumps", aliases: ["box jump","box jumps"], p: ["quads","glutes"], s: ["calves","hamstrings","core"], sys: 1.3 },
+  { name: "Power Clean", aliases: ["power clean","power cleans","hang clean","hang cleans","clean pull","clean pulls"], p: ["glutes","hamstrings"], s: ["quads","mid-back","forearms-grip","core"], sys: 1.4, pow: true },
+  { name: "Kettlebell Swing", aliases: ["kettlebell swing","kettlebell swings","kb swing","kb swings"], p: ["glutes","hamstrings"], s: ["low-back","core","forearms-grip"], sys: 1.3, pow: true },
   { name: "Broad Jumps", aliases: ["broad jump","broad jumps","standing long jump"], p: ["quads","glutes"], s: ["calves","hamstrings","core"], sys: 1.3 },
   { name: "Lateral Bounds", aliases: ["lateral bound","lateral bounds","skater jumps","skaters"], p: ["glutes","abductors"], s: ["quads","calves","adductors"], sys: 1.3 },
   { name: "Depth Jumps", aliases: ["depth jump","depth jumps","pogo hops","pogos"], p: ["calves","quads"], s: ["glutes","core"], sys: 1.3 },
@@ -247,15 +256,16 @@ const SYS_BASE = 0.18, SYS_DECAY = 0.62;
 function sessionSys(exercises){
   let t = 0;
   for (const ex of exercises) {
+    const powF = ex.pow ? 1.25 : 1; /* max-velocity intent = high neural cost */
     if (ex.setDetail && ex.setDetail.length) {
       let s = 0;
       ex.setDetail.forEach((sd, i) => {
         const setF = i < 3 ? 1.0 : i < 5 ? 0.8 : 0.6;
         s += setF * (INTENSITY[sd.intensity ?? ex.intensity] ?? 1);
       });
-      t += SYS_BASE * s * (ex.sys || 1);
+      t += SYS_BASE * s * (ex.sys || 1) * powF;
     } else {
-      t += SYS_BASE * (INTENSITY[ex.intensity] ?? 1) * setLoadSum(ex.sets || 3) * (ex.sys || 1);
+      t += SYS_BASE * (INTENSITY[ex.intensity] ?? 1) * setLoadSum(ex.sets || 3) * (ex.sys || 1) * powF;
     }
   }
   return t;
@@ -416,6 +426,7 @@ function parseSession(text, customLib) {
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
       if (ex.hold) base.hold = true;
       if (ex.ecc || eccOf(seg, !!(sr && (sr.dur || sr.dist)))) base.ecc = true;
+      if (ex.pow || powOf(seg)) base.pow = true;
       if (/\bband(s|ed)?\b/i.test(seg) || /band/i.test(ex.name)){
         const cm = seg.match(/\b(red|blue|green|black|purple|orange|yellow|gr[ae]y|white|pink|teal|tan|gold|silver)\b/i);
         base.band = cm ? cm[1].toLowerCase() : "band";
@@ -471,6 +482,7 @@ function parseSession(text, customLib) {
         setDetail: tokens.length ? tokens : undefined, intensity: detectIntensity(seg) };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) item.bw = true;
       if (eccOf(seg, false)) item.ecc = true;
+      if (powOf(seg)) item.pow = true;
       if (/\b(iso(metric)?|hold)\b/i.test(seg)){
         item.hold = true;
         const tl2 = timeList(seg);
@@ -530,7 +542,7 @@ function parseRecovery(text){
 
 const Engine = {
   MUSCLES, INTENSITY, EXERCISE_LIBRARY, BASE_PRIMARY, SECONDARY_FACTOR, DECAY_RATE, DOMS_BUMP, CAP,
-  setLoadSum, daysBetween, decaySnapshot, sessionFatigue, applySession, round1, DECAY_BY_MUSCLE, repFactor, eccOf,
+  setLoadSum, daysBetween, decaySnapshot, sessionFatigue, applySession, round1, DECAY_BY_MUSCLE, repFactor, eccOf, powOf, sessionSys,
   decaySnapshotAdj, parseRecovery,
   SYS_BASE, SYS_DECAY, sessionSys, applySys, decaySys,
   normalize, matchExercise, detectIntensity, parseSetsReps, parseSetTokens, parseWeight, maxWeight,
@@ -650,6 +662,13 @@ function seriesOf(sessions){
   for (const s of [...sessions].sort((a,b)=>a.date.localeCompare(b.date))){
     for (const x of (s.exercises||[])){
       if (x.band) continue;
+      if (x.pow){
+        let bw2 = 0;
+        if (x.setDetail && x.setDetail.length){ for (const sd of x.setDetail){ if (sd.weight != null) bw2 = Math.max(bw2, sd.weight); } }
+        else if (x.weight != null) bw2 = x.weight;
+        if (bw2) (map[x.name + " \u00b7 power"] = map[x.name + " \u00b7 power"] || { unit: " lbs (speed)", pts: [] }).pts.push({ d: s.date, v: bw2 });
+        continue;
+      }
       let v = null, unit = "";
       if (x.hold){ v = x.setDetail && x.setDetail.length ? Math.max(...x.setDetail.map(sd=>holdS(sd.reps)),0) : (x.dur ? Math.round(x.dur*60) : holdS(x.reps)); unit = "s"; }
       else if (x.dur){ v = x.dur; unit = " min"; }

@@ -135,6 +135,13 @@ function eccOf(seg, isCardio){
   return false;
 }
 
+/* power/speed (dynamic-effort) work: light load, maximal bar speed. "power" alone
+   counts unless it's part of an exercise name like power clean (library flags those). */
+function powOf(seg){
+  return /\b(speed work|dynamic effort|explosive|bar speed|speed (bench|squat|deadlifts?|dead|press|pulls?|rows?))\b/i.test(seg)
+    || /\bpower\b(?!\s*(clean|snatch))/i.test(seg);
+}
+
 const DECAY_RATE = 0.78;   // per day (default: chest, lats, mid-back)
 /* small muscles recover faster; big lower-body slower */
 const DECAY_BY_MUSCLE = {
@@ -226,6 +233,8 @@ const EXERCISE_LIBRARY = [
   { name: "Rowing", aliases: ["rowing","row erg","erg","rower"], p: ["mid-back","quads"], s: ["lats","hamstrings","biceps","core","forearms-grip"], sys: 1.6 },
   { name: "Jump Rope", aliases: ["jump rope","jump-rope","jumping rope"], p: ["calves"], s: ["quads","core","forearms-grip"], sys: 1.6 },
   { name: "Box Jumps", aliases: ["box jump","box jumps"], p: ["quads","glutes"], s: ["calves","hamstrings","core"], sys: 1.3 },
+  { name: "Power Clean", aliases: ["power clean","power cleans","hang clean","hang cleans","clean pull","clean pulls"], p: ["glutes","hamstrings"], s: ["quads","mid-back","forearms-grip","core"], sys: 1.4, pow: true },
+  { name: "Kettlebell Swing", aliases: ["kettlebell swing","kettlebell swings","kb swing","kb swings"], p: ["glutes","hamstrings"], s: ["low-back","core","forearms-grip"], sys: 1.3, pow: true },
   { name: "Broad Jumps", aliases: ["broad jump","broad jumps","standing long jump"], p: ["quads","glutes"], s: ["calves","hamstrings","core"], sys: 1.3 },
   { name: "Lateral Bounds", aliases: ["lateral bound","lateral bounds","skater jumps","skaters"], p: ["glutes","abductors"], s: ["quads","calves","adductors"], sys: 1.3 },
   { name: "Depth Jumps", aliases: ["depth jump","depth jumps","pogo hops","pogos"], p: ["calves","quads"], s: ["glutes","core"], sys: 1.3 },
@@ -311,15 +320,16 @@ const SYS_BASE = 0.18, SYS_DECAY = 0.62;
 function sessionSys(exercises){
   let t = 0;
   for (const ex of exercises) {
+    const powF = ex.pow ? 1.25 : 1; /* max-velocity intent = high neural cost */
     if (ex.setDetail && ex.setDetail.length) {
       let s = 0;
       ex.setDetail.forEach((sd, i) => {
         const setF = i < 3 ? 1.0 : i < 5 ? 0.8 : 0.6;
         s += setF * (INTENSITY[sd.intensity ?? ex.intensity] ?? 1);
       });
-      t += SYS_BASE * s * (ex.sys || 1);
+      t += SYS_BASE * s * (ex.sys || 1) * powF;
     } else {
-      t += SYS_BASE * (INTENSITY[ex.intensity] ?? 1) * setLoadSum(ex.sets || 3) * (ex.sys || 1);
+      t += SYS_BASE * (INTENSITY[ex.intensity] ?? 1) * setLoadSum(ex.sets || 3) * (ex.sys || 1) * powF;
     }
   }
   return t;
@@ -480,6 +490,7 @@ function parseSession(text, customLib) {
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
       if (ex.hold) base.hold = true;
       if (ex.ecc || eccOf(seg, !!(sr && (sr.dur || sr.dist)))) base.ecc = true;
+      if (ex.pow || powOf(seg)) base.pow = true;
       if (/\bband(s|ed)?\b/i.test(seg) || /band/i.test(ex.name)){
         const cm = seg.match(/\b(red|blue|green|black|purple|orange|yellow|gr[ae]y|white|pink|teal|tan|gold|silver)\b/i);
         base.band = cm ? cm[1].toLowerCase() : "band";
@@ -535,6 +546,7 @@ function parseSession(text, customLib) {
         setDetail: tokens.length ? tokens : undefined, intensity: detectIntensity(seg) };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) item.bw = true;
       if (eccOf(seg, false)) item.ecc = true;
+      if (powOf(seg)) item.pow = true;
       if (/\b(iso(metric)?|hold)\b/i.test(seg)){
         item.hold = true;
         const tl2 = timeList(seg);
@@ -594,7 +606,7 @@ function parseRecovery(text){
 
 const Engine = {
   MUSCLES, INTENSITY, EXERCISE_LIBRARY, BASE_PRIMARY, SECONDARY_FACTOR, DECAY_RATE, DOMS_BUMP, CAP,
-  setLoadSum, daysBetween, decaySnapshot, sessionFatigue, applySession, round1, DECAY_BY_MUSCLE, repFactor, eccOf,
+  setLoadSum, daysBetween, decaySnapshot, sessionFatigue, applySession, round1, DECAY_BY_MUSCLE, repFactor, eccOf, powOf, sessionSys,
   decaySnapshotAdj, parseRecovery,
   SYS_BASE, SYS_DECAY, sessionSys, applySys, decaySys,
   normalize, matchExercise, detectIntensity, parseSetsReps, parseSetTokens, parseWeight, maxWeight,
@@ -1637,6 +1649,7 @@ function draftItemHtml(it, i){
     + `<span class="ichip ${it.bw?"on":""}" data-bwtoggle="${i}" style="${it.bw?"":"opacity:.75"}">BW</span>`
     + `<span class="ichip ${it.side==="L"?"on":""}" data-sideto="${i}:L" style="${it.side==="L"?"":"opacity:.75"}">L</span>`
     + `<span class="ichip ${it.side==="R"?"on":""}" data-sideto="${i}:R" style="${it.side==="R"?"":"opacity:.75"}">R</span>`
+    + ((it.band!==undefined||it.dist||it.dur)?``:`<span class="ichip ${it.pow?"on":""}" data-powtoggle="${i}" style="${it.pow?"":"opacity:.75"}" title="Power/speed work — light load moved fast. Charts separately, never touches strength e1RM; systemic load ×1.25">power</span>`)
     + ((it.band!==undefined||it.dist||it.dur)?``:`<span class="ichip ${it.ecc?"on":""}" data-ecctoggle="${i}" style="${it.ecc?"":"opacity:.75"}" title="Eccentric-emphasis (negatives, tempo, nordics) — biggest soreness driver, fatigue ×1.25">ecc</span>`)
     + ((it.band!==undefined||it.dist)?``:`<span class="ichip ${it.hold?"on":""}" data-holdtoggle="${i}" style="${it.hold?"":"opacity:.75"}">⏱ hold</span>`)
     + ((it.setDetail||it.hold)?``:`<span class="ichip ${it.dur?"on":""}" data-durtoggle="${i}" style="${it.dur?"":"opacity:.75"}">⏱ cardio</span>`)
@@ -1737,7 +1750,7 @@ function tabLog(c){
 }
 
 function fmtExercise(x){
-  const _e = x.ecc ? " · negatives" : "";
+  const _e = (x.ecc ? " · negatives" : "") + (x.pow ? " · power" : "");
   if (x.band) return `${x.name} ${x.sets}×${x.reps||"?"} @ ${x.band==="band"?"band":x.band+" band"} (${x.intensity})${_e}`;
   if (x.hold && x.setDetail && x.setDetail.length) return `${x.name} holds ${x.setDetail.map(s=>s.reps).join(", ")} (${x.intensity})${_e}`;
   if (x.dur) return `${x.name} ${x.bouts&&x.bouts.length>1?x.bouts.join("+")+" min bouts":x.dur+" min"} (${x.intensity})${_e}`;
@@ -2188,7 +2201,10 @@ function liftSeries(c){
         vol = x.weight * r * (x.sets || 1);
         top = { w: x.weight, r, e1: e1rm(x.weight, r), int: x.intensity };
       }
-      if (top){ (map[x.name] = map[x.name] || []).push({ date: s.date, w: top.w, r: top.r, e1: top.e1, ...(top.int?{int:top.int}:{}), ...(top.bw?{bw:true}:{}), ...(top.du?{du:true, unit:top.unit}:{}), vol }); }
+      if (top && x.pow && top.w != null){ /* speed work: chart the load, never e1RM, own series */
+        const key = x.name + " · power";
+        (map[key] = map[key] || []).push({ date: s.date, w: top.w, r: top.r, e1: top.w, pw:true, ...(top.int?{int:top.int}:{}), vol });
+      } else if (top && !x.pow){ (map[x.name] = map[x.name] || []).push({ date: s.date, w: top.w, r: top.r, e1: top.e1, ...(top.int?{int:top.int}:{}), ...(top.bw?{bw:true}:{}), ...(top.du?{du:true, unit:top.unit}:{}), vol }); }
     }
   }
   return map;
@@ -2225,7 +2241,9 @@ function chartSvg(pts, exName){
   /* dots + weight×reps labels + x dates */
   for (let i = 0; i < pts.length; i++){
     const p = pts[i], x = X(i), y = Y(p.e1);
-    const detail = p.du
+    const detail = p.pw
+      ? `${fmtDate(p.date)} · speed work ${p.w}×${p.r||"?"} — moving fast, not grinding`
+      : p.du
       ? `${fmtDate(p.date)} · ${p.e1} ${p.unit||"min"}`
       : p.bw
       ? `${fmtDate(p.date)} · top set ${p.r} reps at bodyweight${p.vol?` · ${Math.round(p.vol)} total reps`:""}`
@@ -2233,7 +2251,7 @@ function chartSvg(pts, exName){
     out += `<circle cx="${x}" cy="${y}" r="4.5" fill="#A8C4E0" stroke="#0A0E18" stroke-width="1.5"><title>${detail}</title></circle>`;
     if (exName) out += `<circle cx="${x}" cy="${y}" r="13" fill="transparent" style="cursor:pointer" data-cpt="${esc(exName)}|${p.date}"><title>${detail}</title></circle>`;
     const lx = Math.min(Math.max(x, L+20), W-R-22);
-    out += `<text x="${lx}" y="${y-9}" text-anchor="middle" fill="#CFD3DC" font-size="11" font-weight="700">${p.du?`${p.e1} ${p.unit||"min"}`:p.bw?`${p.r} reps`:(p.r?`${p.w}×${p.r}`:p.w)}</text>`;
+    out += `<text x="${lx}" y="${y-9}" text-anchor="middle" fill="#CFD3DC" font-size="11" font-weight="700">${p.pw?(p.r?`${p.w}×${p.r}`:p.w):p.du?`${p.e1} ${p.unit||"min"}`:p.bw?`${p.r} reps`:(p.r?`${p.w}×${p.r}`:p.w)}</text>`;
     const d = new Date(p.date+"T00:00:00");
     const lbl = (d.getMonth()+1)+"/"+d.getDate();
     if (pts.length <= 8 || i === 0 || i === pts.length-1 || i % Math.ceil(pts.length/6) === 0)
@@ -2314,17 +2332,22 @@ function buildChartCards(c){
   return entries.map(({n, pts})=>{
     const bwMode = pts.some(p=>p.bw);
     const duMode = pts.some(p=>p.du);
+    const pwMode = pts.some(p=>p.pw);
     const last = pts[pts.length-1];
     const first = pts[0];
     const delta = pts.length > 1 ? (Math.round((last.e1 - first.e1)*10)/10) : 0;
-    const unit = duMode ? (last.unit||"min") : bwMode ? "reps" : "lbs e1RM";
+    const unit = pwMode ? "lbs (speed work)" : duMode ? (last.unit||"min") : bwMode ? "reps" : "lbs e1RM";
     const trend = pts.length > 1 ? ` · ${delta >= 0 ? "+" : ""}${delta} ${unit} since ${fmtDate(first.date)}` : " · first data point";
-    const head = duMode
+    const head = pwMode
+      ? `speed work at ${last.e1} lbs (${last.r?`sets of ${last.r}`:"low reps"})${trend}`
+      : duMode
       ? (last.unit==="s" ? `best hold ${last.e1}s${trend}` : `last session ${last.e1} ${last.unit||"min"}${trend}`)
       : bwMode
       ? `top set ${last.e1} reps (bodyweight)${trend}`
       : `est 1RM ${last.e1} lbs (best set ${last.r?`${last.w}×${last.r}`:last.w})${trend}`;
-    const foot = duMode
+    const foot = pwMode
+      ? `Power/speed sets — load only, kept off the strength chart. Bar speed is the real metric; a velocity sensor can plug in here later.`
+      : duMode
       ? `Bold line: session duration/distance · Hover or tap points for detail`
       : bwMode
       ? `Bold line: top-set reps at bodyweight · Thin line: total session reps · Hover or tap points for detail`
@@ -2662,7 +2685,7 @@ function rebuildClient(c){
   const map = {};
   for (const p of c.prs.filter(p=>p.date < "2026-06-22")) map[p.exercise] = { ...p };
   for (const s of structured) for (const x of s.exercises){
-    if (x.band) continue;
+    if (x.band || x.pow) continue; /* speed work never sets or breaks strength PRs */
     const e0 = map[x.name];
     if (x.hold){
       const secs = holdSecs(x);
@@ -2693,7 +2716,7 @@ function rebuildClient(c){
 /* Save a parsed session for a specific client (used by log tab + client-submission review) */
 function applyParsedSession(c, items, date, title, solo){
   const before = {}; for (const p of c.prs) before[p.exercise] = { w: p.weight, r: p.reps, bw: !!p.bw, hold: !!p.hold, s2: p.secs };
-  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw,side,dur,dist,hold,band,bouts,ecc})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(side?{side}:{}),...(hold?{hold:true}:{}),...(ecc?{ecc:true}:{}),...(dur?{dur}:{}),...(bouts?{bouts}:{}),...(dist?{dist}:{}),...(band!==undefined?{band:band||"band"}:{}),...(setDetail?{setDetail}:{})})) });
+  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw,side,dur,dist,hold,band,bouts,ecc,pow})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(side?{side}:{}),...(hold?{hold:true}:{}),...(ecc?{ecc:true}:{}),...(pow?{pow:true}:{}),...(dur?{dur}:{}),...(bouts?{bouts}:{}),...(dist?{dist}:{}),...(band!==undefined?{band:band||"band"}:{}),...(setDetail?{setDetail}:{})})) });
   c.sessions.sort((a,b)=>b.date.localeCompare(a.date));
   rebuildClient(c);
   let prMsg = "";
@@ -2887,7 +2910,7 @@ function confirmAssign(){
   save(); syncExLib();
   const item = { name, primary:p, secondary:s, sets:it.setDetail?it.setDetail.length:(it.sets||3),
     reps:it.reps||"", weight:it.weight??null, intensity:it.intensity||"moderate",
-    ...(it.bw?{bw:true}:{}), ...(it.band!==undefined?{band:it.band}:{}), ...(it.hold?{hold:true}:{}), ...(it.ecc?{ecc:true}:{}),
+    ...(it.bw?{bw:true}:{}), ...(it.band!==undefined?{band:it.band}:{}), ...(it.hold?{hold:true}:{}), ...(it.ecc?{ecc:true}:{}), ...(it.pow?{pow:true}:{}),
     ...(it.dur?{dur:it.dur}:{}), ...(it.dist?{dist:it.dist}:{}), ...(it.side?{side:it.side}:{}),
     ...(it.setDetail?{setDetail:it.setDetail}:{}), raw:it.raw };
   const AD = activeDraft();
@@ -3296,7 +3319,7 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-holdtoggle],[data-ecctoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injflag],[data-rfnone],[data-rfsome],[data-rfclear],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject],[data-mvplay],[data-mvscore],[data-mvadopt],[data-mvpin],[data-mvdel],[data-mvcompare],[data-cpt]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-holdtoggle],[data-ecctoggle],[data-powtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injflag],[data-rfnone],[data-rfsome],[data-rfclear],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject],[data-mvplay],[data-mvscore],[data-mvadopt],[data-mvpin],[data-mvdel],[data-mvcompare],[data-cpt]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
@@ -3395,6 +3418,9 @@ function bind(){
       if (it.band !== undefined) delete it.band;
       else { it.band = ""; it.weight = null; delete it.dur; delete it.dist; }
       persistDraft(); render(); }
+    else if (ds.powtoggle!==undefined && ds.powtoggle!==""){ const it = activeDraft()[+ds.powtoggle];
+      it.pow = !it.pow;
+      persistDraft(); render(); }
     else if (ds.ecctoggle!==undefined && ds.ecctoggle!==""){ const it = activeDraft()[+ds.ecctoggle];
       it.ecc = !it.ecc; if (it.ecc) it.hold = false;
       persistDraft(); render(); }
@@ -3434,7 +3460,7 @@ function bind(){
       normalizeItem(it); render(); }
     else if (ds.mus){ const m=ds.mus; assignSel[m]=assignSel[m]==="p"?"s":assignSel[m]==="s"?undefined:"p"; if(!assignSel[m])delete assignSel[m]; render(); }
     else if (ds.pick!==undefined && ds.pick!==""){ const ex=E.EXERCISE_LIBRARY.concat(S.customExercises||[])[+ds.pick];
-      const mk = () => ({name:ex.name,primary:ex.p,secondary:ex.s,sets:3,reps:"",weight:null,intensity:"moderate",...(ex.hold?{hold:true}:{}),...(ex.bw?{bw:true}:{}),...(ex.ecc?{ecc:true}:{})});
+      const mk = () => ({name:ex.name,primary:ex.p,secondary:ex.s,sets:3,reps:"",weight:null,intensity:"moderate",...(ex.hold?{hold:true}:{}),...(ex.bw?{bw:true}:{}),...(ex.ecc?{ecc:true}:{}),...(ex.pow?{pow:true}:{})});
       draft.push(mk()); if (duoPartnerId) duoDraftB.push(mk()); pickerOpen=false; render(); }
     else if (ds.close && e.target.classList.contains("modal-bg")){ assignTarget=null; pickerOpen=false; render(); }
     else if (ds.act){
