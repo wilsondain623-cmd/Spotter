@@ -63,6 +63,14 @@ const INTENSITY_WORDS = [
 /* Base fatigue per primary muscle per set (moderate). Secondary = 50%. */
 const BASE_PRIMARY = 0.4;
 const SECONDARY_FACTOR = 0.3;
+/* eccentric-emphasis: biggest DOMS/damage driver. "tempo" only counts for lifting
+   segments (a "tempo run" is a pace, not a negative). */
+function eccOf(seg, isCardio){
+  if (/\b(eccentric(s)?|negatives?|slow\s+lowers?|downhill)\b/i.test(seg)) return true;
+  if (!isCardio && /\btempo\b/i.test(seg)) return true;
+  return false;
+}
+
 const DECAY_RATE = 0.78;   // per day (default: chest, lats, mid-back)
 /* small muscles recover faster; big lower-body slower */
 const DECAY_BY_MUSCLE = {
@@ -92,7 +100,7 @@ const EXERCISE_LIBRARY = [
   { name: "Reverse Lunge", aliases: ["reverse lunge","reverse lunge with db overhead"], p: ["quads","glutes"], s: ["hamstrings"] },
   { name: "Hip Thrust", aliases: ["hip thrust"], p: ["glutes"], s: ["hamstrings"] },
   { name: "Leg Curl", aliases: ["leg curl","hamstring curl"], p: ["hamstrings"], s: [] },
-  { name: "Nordic Curl", aliases: ["nordic curl","nordic curls","nordic ham curl","nordics"], p: ["hamstrings"], s: ["core"] },
+  { name: "Nordic Curl", aliases: ["nordic curl","nordic curls","nordic ham curl","nordics"], p: ["hamstrings"], s: ["core"], ecc: true },
   { name: "Leg Extension", aliases: ["leg extension","isometric leg extension"], p: ["quads"], s: [] },
   { name: "Calf Raise", aliases: ["calf raise","calf raises"], p: ["calves"], s: [] },
   { name: "Adductor Machine", aliases: ["adductor machine","adductors machine","hip adduction","hip adductions","adduction machine"], p: ["adductors"], s: [] },
@@ -214,8 +222,9 @@ function sessionFatigue(exercises) {
     } else {
       load = (INTENSITY[ex.intensity] ?? 1.0) * setLoadSum(ex.sets || 3) * repFactor(ex.reps);
     }
-    for (const m of ex.primary || []) add[m] += BASE_PRIMARY * load;
-    for (const m of ex.secondary || []) add[m] += BASE_PRIMARY * SECONDARY_FACTOR * load;
+    const exF = ex.ecc ? 1.25 : ex.hold ? 0.85 : 1; /* eccentric damage up, isometric damage down */
+    for (const m of ex.primary || []) add[m] += BASE_PRIMARY * load * exF;
+    for (const m of ex.secondary || []) add[m] += BASE_PRIMARY * SECONDARY_FACTOR * load * exF;
   }
   return add;
 }
@@ -406,6 +415,7 @@ function parseSession(text, customLib) {
       const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: detectIntensity(seg), raw: seg };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
       if (ex.hold) base.hold = true;
+      if (ex.ecc || eccOf(seg, !!(sr && (sr.dur || sr.dist)))) base.ecc = true;
       if (/\bband(s|ed)?\b/i.test(seg) || /band/i.test(ex.name)){
         const cm = seg.match(/\b(red|blue|green|black|purple|orange|yellow|gr[ae]y|white|pink|teal|tan|gold|silver)\b/i);
         base.band = cm ? cm[1].toLowerCase() : "band";
@@ -460,6 +470,7 @@ function parseSession(text, customLib) {
         weight: tokens.length ? maxWeight(tokens) : parseWeight(seg),
         setDetail: tokens.length ? tokens : undefined, intensity: detectIntensity(seg) };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) item.bw = true;
+      if (eccOf(seg, false)) item.ecc = true;
       if (/\b(iso(metric)?|hold)\b/i.test(seg)){
         item.hold = true;
         const tl2 = timeList(seg);
@@ -519,7 +530,7 @@ function parseRecovery(text){
 
 const Engine = {
   MUSCLES, INTENSITY, EXERCISE_LIBRARY, BASE_PRIMARY, SECONDARY_FACTOR, DECAY_RATE, DOMS_BUMP, CAP,
-  setLoadSum, daysBetween, decaySnapshot, sessionFatigue, applySession, round1, DECAY_BY_MUSCLE, repFactor,
+  setLoadSum, daysBetween, decaySnapshot, sessionFatigue, applySession, round1, DECAY_BY_MUSCLE, repFactor, eccOf,
   decaySnapshotAdj, parseRecovery,
   SYS_BASE, SYS_DECAY, sessionSys, applySys, decaySys,
   normalize, matchExercise, detectIntensity, parseSetsReps, parseSetTokens, parseWeight, maxWeight,
