@@ -1551,12 +1551,19 @@ function tabBrief(c){
 }
 
 function draftItemHtml(it, i){
+  /* holds are per-set-time by default — like weights on a pyramid */
+  if (it.hold && !it.unmatched && !it.setDetail && !it.dur){
+    const times = (it.reps||"").split(/[\/,+]/).map(s=>s.trim()).filter(s=>/\d/.test(s));
+    it.setDetail = Array.from({length:Math.max(1, it.sets||3)}, (_,j)=>({reps:times[j]||times[0]||"", weight:null}));
+    normalizeItem(it);
+  }
   const chips = ["warmup","moderate","heavy","max"].map(k=>
     `<span class="ichip ${it.intensity===k?"on":""}" data-int="${i}:${k}">${k}</span>`).join("")
     + `<span class="ichip ${it.bw?"on":""}" data-bwtoggle="${i}" style="${it.bw?"":"opacity:.75"}">BW</span>`
     + `<span class="ichip ${it.side==="L"?"on":""}" data-sideto="${i}:L" style="${it.side==="L"?"":"opacity:.75"}">L</span>`
     + `<span class="ichip ${it.side==="R"?"on":""}" data-sideto="${i}:R" style="${it.side==="R"?"":"opacity:.75"}">R</span>`
-    + (it.setDetail?``:`<span class="ichip ${it.dur?"on":""}" data-durtoggle="${i}" style="${it.dur?"":"opacity:.75"}">⏱ time</span>`)
+    + ((it.band!==undefined||it.dist)?``:`<span class="ichip ${it.hold?"on":""}" data-holdtoggle="${i}" style="${it.hold?"":"opacity:.75"}">⏱ hold</span>`)
+    + ((it.setDetail||it.hold)?``:`<span class="ichip ${it.dur?"on":""}" data-durtoggle="${i}" style="${it.dur?"":"opacity:.75"}">⏱ cardio</span>`)
     + (it.setDetail?``:`<span class="ichip ${it.band!==undefined?"on":""}" data-bandtoggle="${i}" style="${it.band!==undefined?"":"opacity:.75"}">band</span>`);
   let body;
   if (it.unmatched){
@@ -1564,9 +1571,9 @@ function draftItemHtml(it, i){
   } else if (it.setDetail){
     body = it.setDetail.map((sd,j)=>`<div class="minirow">
       <span class="lbl" style="width:36px">set ${j+1}</span>
-      ${(it.bw||it.hold)?`<span class="lbl" style="width:72px;color:var(--ice)">${it.hold?"hold":"BW"}</span>`:`<input type="number" inputmode="decimal" style="width:72px" value="${sd.weight??""}" data-sdw="${i}:${j}" placeholder="lbs">`}
+      ${it.hold?`<span class="lbl" style="width:36px;color:var(--ice)">hold</span><input type="text" inputmode="decimal" style="width:92px" value="${esc(sd.reps||"")}" data-sdr="${i}:${j}" placeholder="e.g. 45s">`:`${it.bw?`<span class="lbl" style="width:72px;color:var(--ice)">BW</span>`:`<input type="number" inputmode="decimal" style="width:72px" value="${sd.weight??""}" data-sdw="${i}:${j}" placeholder="lbs">`}
       <span class="lbl">×</span>
-      <input type="text" style="width:52px${!it.bw&&!it.hold&&sd.weight!=null&&!sd.reps?";border-color:#c95f5f":""}" value="${esc(sd.reps||"")}" data-sdr="${i}:${j}" placeholder="${it.hold?"45s":"reps?"}">
+      <input type="text" style="width:52px${!it.bw&&sd.weight!=null&&!sd.reps?";border-color:#c95f5f":""}" value="${esc(sd.reps||"")}" data-sdr="${i}:${j}" placeholder="reps?">`}
       <select data-sdi="${i}:${j}" style="width:86px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:${sd.intensity?"var(--text)":"var(--dim)"};font-size:12px;padding:6px 4px">
         <option value="" ${!sd.intensity?"selected":""}>↳ ${esc(it.intensity)}</option>
         ${["warmup","moderate","heavy","max"].map(k=>`<option value="${k}" ${sd.intensity===k?"selected":""}>${k}</option>`).join("")}
@@ -1589,7 +1596,7 @@ function draftItemHtml(it, i){
     <div class="ichips">${chips}</div>` : `<div class="minirow">
       <span class="lbl">sets</span><input type="number" inputmode="numeric" style="width:58px" value="${it.sets}" data-sets="${i}">
       <span class="lbl">reps</span><input type="text" style="width:70px${!it.bw&&it.weight!=null&&!it.reps?";border-color:#c95f5f":""}" value="${esc(it.reps||"")}" data-reps="${i}" placeholder="reps?">
-      ${it.bw?`<span class="lbl" style="color:var(--ice)">bodyweight</span>`:`<span class="lbl">lbs</span><input type="number" inputmode="decimal" style="width:74px" value="${it.weight??""}" data-wt="${i}">`}
+      ${it.hold?`<span class="lbl" style="color:var(--ice)">hold</span>`:it.bw?`<span class="lbl" style="color:var(--ice)">bodyweight</span>`:`<span class="lbl">lbs</span><input type="number" inputmode="decimal" style="width:74px" value="${it.weight??""}" data-wt="${i}">`}
     </div>
     <div class="minirow"><button class="btn-sm" data-sdmode="${i}">${it.hold?"⇄ per-set times (varying holds)":"⇄ per-set weights (pyramid)"}</button></div>
     <div class="ichips">${chips}</div>`;
@@ -2091,7 +2098,7 @@ function liftSeries(c){
   return map;
 }
 
-function chartSvg(pts){
+function chartSvg(pts, exName){
   const W = 520, H = 210, L = 46, R = 12, T = 18, B = 34;
   const iw = W - L - R, ih = H - T - B;
   const ws = pts.map(p=>p.e1), vmax = Math.max(...pts.map(p=>p.vol), 1);
@@ -2127,7 +2134,8 @@ function chartSvg(pts){
       : p.bw
       ? `${fmtDate(p.date)} · top set ${p.r} reps at bodyweight${p.vol?` · ${Math.round(p.vol)} total reps`:""}`
       : `${fmtDate(p.date)} · best set ${p.r?`${p.w}×${p.r}`:p.w+" lbs (no reps logged)"} · est 1RM ${p.e1} lbs${p.vol?` · session volume ${Math.round(p.vol)}`:""}`;
-    out += `<circle cx="${x}" cy="${y}" r="4.5" fill="#A8C4E0" stroke="#0A0E18" stroke-width="1.5" data-bmv="${detail}"><title>${detail}</title></circle>`;
+    out += `<circle cx="${x}" cy="${y}" r="4.5" fill="#A8C4E0" stroke="#0A0E18" stroke-width="1.5"><title>${detail}</title></circle>`;
+    if (exName) out += `<circle cx="${x}" cy="${y}" r="13" fill="transparent" style="cursor:pointer" data-cpt="${esc(exName)}|${p.date}"><title>${detail}</title></circle>`;
     const lx = Math.min(Math.max(x, L+20), W-R-22);
     out += `<text x="${lx}" y="${y-9}" text-anchor="middle" fill="#CFD3DC" font-size="11" font-weight="700">${p.du?`${p.e1} ${p.unit||"min"}`:p.bw?`${p.r} reps`:(p.r?`${p.w}×${p.r}`:p.w)}</text>`;
     const d = new Date(p.date+"T00:00:00");
@@ -2136,6 +2144,64 @@ function chartSvg(pts){
       out += `<text x="${x}" y="${H-10}" text-anchor="middle" fill="#8b93a5" font-size="10">${lbl}</text>`;
   }
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block">${out}</svg>`;
+}
+
+/* ---- fix/delete a chart data point (bad entry noticed later) ---- */
+function findChartEntries(c, name, date){
+  const hits = [];
+  (c.sessions||[]).forEach((s, si)=>{
+    if (s.date !== date) return;
+    (s.exercises||[]).forEach((x, xi)=>{ if (x.name === name) hits.push({ si, xi }); });
+  });
+  return hits;
+}
+function deleteChartEntry(c, name, date, k, alsoSession){
+  const hits = findChartEntries(c, name, date);
+  const h = hits[k||0]; if (!h) return false;
+  const s = c.sessions[h.si];
+  s.exercises.splice(h.xi, 1);
+  if (!s.exercises.length || alsoSession) c.sessions.splice(h.si, 1);
+  rebuildClient(c); save();
+  return true;
+}
+function chartPointModal(c, name, date){
+  const hits = findChartEntries(c, name, date);
+  if (!hits.length){ toast("Entry not found — it may have been edited already"); return; }
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  const rows = hits.map((h,k)=>{
+    const s = c.sessions[h.si], x = s.exercises[h.xi];
+    return `<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:8px">
+      <div style="font-size:12px;color:var(--dim)">${fmtDate(date)} · ${esc(s.title||"Session")}${s.solo?" · solo":""}</div>
+      <div style="font-size:13px;margin-top:2px">${esc(fmtExercise(x))}</div>
+      <div class="row" style="gap:8px;margin-top:8px">
+        <button class="btn2 grow" data-k="${k}" data-cpa="fix">✎ Fix in Log</button>
+        <button class="btn2 grow" style="color:#e0a8a8" data-k="${k}" data-cpa="del">Delete entry</button>
+      </div></div>`;
+  }).join("");
+  wrap.innerHTML = `<div class="modal"><h2 style="margin-top:0">${esc(name)}</h2>
+    <div class="muted" style="font-size:11px">This point comes from the entr${hits.length>1?"ies":"y"} below. Deleting replays everything — fatigue, PRs and charts recalculate.</div>
+    ${rows}
+    <button class="btn2" style="width:100%;margin-top:10px" id="cpClose">Cancel</button></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", ev=>{
+    if (ev.target===wrap || ev.target.id==="cpClose"){ wrap.remove(); return; }
+    const b = ev.target.closest("[data-cpa]"); if (!b) return;
+    const k = +b.dataset.k;
+    const h = findChartEntries(c, name, date)[k]; if (!h){ wrap.remove(); render(); return; }
+    const s = c.sessions[h.si];
+    if (b.dataset.cpa === "del"){
+      const lastOne = s.exercises.length === 1;
+      if (!confirm(`Delete ${name} from "${s.title||"Session"}" (${fmtDate(date)})?${lastOne?"\nIt's the only exercise — the whole session will be removed.":""}`)) return;
+      deleteChartEntry(c, name, date, k);
+      wrap.remove(); render(); toast("Entry deleted — fatigue, PRs and charts recalculated");
+    } else {
+      draft = s.exercises.map(x=>{ const m = exMuscles(x.name); return { ...x, primary:m.p, secondary:m.s }; });
+      draftDate = s.date; draftTitle = s.title || "";
+      c.sessions.splice(h.si, 1); rebuildClient(c); save();
+      view.tab = "log"; wrap.remove(); render(); toast("Session loaded into the draft — fix it and save");
+    }
+  });
 }
 
 function buildChartCards(c){
@@ -2170,7 +2236,7 @@ function buildChartCards(c){
     return `<div class="card">
       <div class="row"><div class="grow"><div class="d-name">${esc(n)}</div>
       <div class="d-meta">${head}</div></div></div>
-      <div style="margin-top:8px">${chartSvg(pts)}</div>
+      <div style="margin-top:8px">${chartSvg(pts, n)}</div>
       <div class="muted" style="margin-top:4px;font-size:10px">${foot}</div>
     </div>`;
   }).join("");
@@ -2926,11 +2992,12 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injflag],[data-rfnone],[data-rfsome],[data-rfclear],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject],[data-mvplay],[data-mvscore],[data-mvadopt],[data-mvpin],[data-mvdel],[data-mvcompare]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-holdtoggle],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injflag],[data-rfnone],[data-rfsome],[data-rfclear],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject],[data-mvplay],[data-mvscore],[data-mvadopt],[data-mvpin],[data-mvdel],[data-mvcompare],[data-cpt]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ if ((draft.length||duoDraftB.length||draftText.trim()) && !confirm("Discard the unsaved session draft?")) return; view={page:"client",clientId:ds.open,tab:"fatigue"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); }
     else if (ds.bmv){ toast(ds.bmv); }
+    else if (ds.cpt){ const ix = ds.cpt.lastIndexOf("|"); chartPointModal(client(), ds.cpt.slice(0,ix), ds.cpt.slice(ix+1)); }
     else if (ds.crange){ chartRange = ds.crange; render(); }
     else if (ds.mvplay) mvPlayModal(ds.mvplay);
     else if (ds.mvscore) mvScoreModal(client(), ds.mvscore);
@@ -3024,9 +3091,16 @@ function bind(){
       if (it.band !== undefined) delete it.band;
       else { it.band = ""; it.weight = null; delete it.dur; delete it.dist; }
       persistDraft(); render(); }
+    else if (ds.holdtoggle!==undefined && ds.holdtoggle!==""){ const it = activeDraft()[+ds.holdtoggle];
+      if (!it.hold){ it.hold = true; it.bw = false; it.weight = null; delete it.dur; delete it.bouts; delete it.dist;
+        const times = (it.reps||"").split(/[\/,+]/).map(s=>s.trim()).filter(s=>/\d/.test(s));
+        it.setDetail = Array.from({length:Math.max(1, it.sets||3)}, (_,j)=>({reps:times[j]||times[0]||"", weight:null}));
+        normalizeItem(it);
+      } else { it.hold = false; delete it.setDetail; it.reps = ""; }
+      persistDraft(); render(); }
     else if (ds.durtoggle!==undefined && ds.durtoggle!==""){ const it = activeDraft()[+ds.durtoggle];
       if (it.dur){ delete it.dur; it.reps = ""; }
-      else { delete it.dist; it.dur = 20; it.sets = 2; it.reps = "20min"; it.weight = null; }
+      else { delete it.dist; it.hold = false; delete it.setDetail; it.dur = 20; it.sets = 2; it.reps = "20min"; it.weight = null; }
       persistDraft(); render(); }
     else if (ds.sideto){ const [i,s] = ds.sideto.split(":"); const it = activeDraft()[+i];
       const base = it.name.replace(/ \((L|R)\)$/, "");
@@ -3053,7 +3127,7 @@ function bind(){
       normalizeItem(it); render(); }
     else if (ds.mus){ const m=ds.mus; assignSel[m]=assignSel[m]==="p"?"s":assignSel[m]==="s"?undefined:"p"; if(!assignSel[m])delete assignSel[m]; render(); }
     else if (ds.pick!==undefined && ds.pick!==""){ const ex=E.EXERCISE_LIBRARY.concat(S.customExercises||[])[+ds.pick];
-      const mk = () => ({name:ex.name,primary:ex.p,secondary:ex.s,sets:3,reps:"",weight:null,intensity:"moderate"});
+      const mk = () => ({name:ex.name,primary:ex.p,secondary:ex.s,sets:3,reps:"",weight:null,intensity:"moderate",...(ex.hold?{hold:true}:{}),...(ex.bw?{bw:true}:{})});
       draft.push(mk()); if (duoPartnerId) duoDraftB.push(mk()); pickerOpen=false; render(); }
     else if (ds.close && e.target.classList.contains("modal-bg")){ assignTarget=null; pickerOpen=false; render(); }
     else if (ds.act){
