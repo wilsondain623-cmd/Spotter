@@ -921,7 +921,7 @@ const NOV_CAP = 1.35, NOV_FREE_DAYS = 14, NOV_RAMP_DAYS = 28, NOV_MIN_SETS = 2;
 function exposureSets(items, m){
   let n = 0;
   for (const it of items){
-    const sets = it.setDetail ? it.setDetail.length : (it.sets || 1);
+    const sets = (it.setDetail ? it.setDetail.length : (it.sets || 1)) * (it.band !== undefined ? 0.5 : 1); /* low-load work = partial soreness protection */
     if ((it.primary||[]).includes(m)) n += sets;
     else if ((it.secondary||[]).includes(m)) n += 0.5 * sets;
   }
@@ -932,18 +932,21 @@ function noveltyFromDays(d){
   if (d <= NOV_FREE_DAYS) return 1;
   return Math.round((1 + (NOV_CAP - 1) * Math.min(1, (d - NOV_FREE_DAYS) / NOV_RAMP_DAYS)) * 1000) / 1000;
 }
-/* hist = [{date, items}] ascending, items with primary/secondary resolved */
-function noveltyLookup(hist, dateISO){
+/* hist = [{date, items}] ascending, items with primary/secondary resolved.
+   Horizon rule: never claim more unexposed days than we've been observing —
+   unless trust=true (client marked "never trained": unknown really IS untrained). */
+function noveltyLookup(hist, dateISO, trust){
   const memo = {};
   const prior = hist.filter(h => h.date < dateISO);
   return m => {
     if (memo[m] != null) return memo[m];
     let f;
-    if (prior.length < 3){ f = 1; } /* new client — base model already calibrated for novices */
+    if (!prior.length){ f = trust ? NOV_CAP : 1; }
     else {
       let last = null;
       for (let i = prior.length - 1; i >= 0; i--){ if (exposureSets(prior[i].items, m) >= NOV_MIN_SETS){ last = prior[i].date; break; } }
-      f = noveltyFromDays(last == null ? null : E.daysBetween(last, dateISO));
+      if (last != null) f = noveltyFromDays(E.daysBetween(last, dateISO));
+      else f = trust ? NOV_CAP : noveltyFromDays(E.daysBetween(prior[0].date, dateISO));
     }
     memo[m] = f;
     return f;
@@ -954,11 +957,18 @@ function muscleNovelty(c, m, dateISO){
   const hist = c.sessions.filter(s => s.exercises && s.exercises.length && s.date < dateISO)
     .sort((a,b)=>a.date.localeCompare(b.date))
     .map(s => ({ date: s.date, items: s.exercises.map(x => { const mm = exMuscles(x.name); return { ...x, primary: mm.p, secondary: mm.s }; }) }));
-  if (hist.length < 3) return { days: null, factor: 1, novice: true };
+  if (!hist.length) return c.novTrust ? { days: null, factor: NOV_CAP } : { days: null, factor: 1, unwatched: true };
   let last = null;
   for (let i = hist.length - 1; i >= 0; i--){ if (exposureSets(hist[i].items, m) >= NOV_MIN_SETS){ last = hist[i].date; break; } }
-  const days = last == null ? null : E.daysBetween(last, dateISO);
-  return { days, factor: noveltyFromDays(days) };
+  if (last != null){ const days = E.daysBetween(last, dateISO); return { days, factor: noveltyFromDays(days) }; }
+  if (c.novTrust) return { days: null, factor: NOV_CAP };
+  const watched = E.daysBetween(hist[0].date, dateISO);
+  return { days: watched, factor: noveltyFromDays(watched), horizon: true };
+}
+/* half the training-age discount applies to novelty — RBE is mostly local tissue protection */
+function novEff(c, dateISO, novFactor){
+  const ageF = ageFactorAt(c, dateISO, c.sessions);
+  return Math.round(((1 + ageF) / 2) * novFactor * 1000) / 1000;
 }
 function packUsed(c){ const p=c.pay; if (!p||p.type!=="pack"||!p.started) return 0; return (p.offset||0) + c.sessions.filter(s=>!s.solo && s.date>=p.started).length; }
 function checkPackRenewal(c){
@@ -1666,9 +1676,10 @@ function draftItemHtml(it, i){
         if (!(key in _novMemo)) _novMemo[key] = muscleNovelty(_nc, m, draftDate || todayISO());
         const nv = _novMemo[key];
         if (nv.factor >= 1.15){
+          const eff = novEff(_nc, draftDate || todayISO(), nv.factor);
           _novWarn = nv.days == null
-            ? `first direct ${m} work on record — expect outsized soreness, start conservative (fatigue counted ×${nv.factor})`
-            : `first direct ${m} work in ${nv.days}d — expect outsized soreness, consider easing volume (fatigue counted ×${nv.factor})`;
+            ? `first ever direct ${m} work — expect real soreness, start conservative (fatigue counted ×${eff})`
+            : `${nv.horizon ? "no direct" : "first direct"} ${m} work in ${nv.days}d${nv.horizon ? " of tracking" : ""} — expect outsized soreness, consider easing volume (fatigue counted ×${eff})`;
           break;
         }
       }
@@ -2624,8 +2635,11 @@ function rebuildClient(c){
     const items = s.exercises.map(x=>{ const m = exMuscles(x.name); return { ...x, primary:m.p, secondary:m.s, sys:m.sys }; });
     const ageF = ageFactorAt(c, s.date, structured);
     const spike = layoffSpike(s.date, structured);
-    const nov = noveltyLookup(_hist, s.date);
-    const tf = m => m == null ? ageF * spike : ageF * Math.max(spike, nov(m));
+    const nov = noveltyLookup(_hist, s.date, !!c.novTrust);
+    const halfAge = (1 + ageF) / 2;
+    const tf = m => { if (m == null) return ageF * spike;
+      const n = nov(m);
+      return n > spike ? Math.max(ageF * spike, halfAge * n) : ageF * spike; };
     sys = E.applySys(sys, last, s.date, items, tf);
     snap = E.applySession(snap, last, s.date, items, tf);
     _hist.push({ date: s.date, items });
@@ -2737,16 +2751,20 @@ function buildSummary(c, items, date, title, prs, before, after, sysB, sysA){
   const spike = layoffSpike(date, c.sessions);
   if (spike > 1.01) flags.push({ t:`Back from a layoff — fatigue counted ×${Math.round(spike*100)/100} this session`, col:"#e0c48a" });
   const novSeen = new Set();
+  let novHit = false;
   for (const it of items){
     if (it.band !== undefined) continue;
     for (const m of (it.primary||[])){
       if (novSeen.has(m)) continue;
       novSeen.add(m);
       const nv = muscleNovelty(c, m, date);
-      if (nv.factor >= 1.15 && nv.factor > spike)
-        flags.push({ t:`${m}: first direct work in ${nv.days == null ? "recorded history" : nv.days + " days"} — fatigue counted ×${nv.factor} (muscle-specific soreness protection fades without exposure)`, col:"#e0c48a" });
+      if (nv.factor >= 1.15 && nv.factor > spike){
+        novHit = true;
+        flags.push({ t:`${m}: first direct work in ${nv.days == null ? "recorded history" : nv.days + " days"} — fatigue counted ×${novEff(c, date, nv.factor)} (muscle-specific soreness protection fades without exposure)`, col:"#e0c48a" });
+      }
     }
   }
+  if (novHit) flags.push({ t:`Soreness from newly-trained muscles usually peaks tomorrow or the day after — tonight's reading isn't the worst of it`, col:"#8b93a5" });
   if (c.photoLog && c.photoLog.length){ const dsince = E.daysBetween(c.photoLog[c.photoLog.length-1], todayISO());
     if (dsince > 30) flags.push({ t:`Progress photos due — last set ${dsince} days ago`, col:"#e0c48a" }); }
   return { name:c.name, date, title, prs, deltas: deltas.slice(0,6), ex: items.length, sets, lbs: Math.round(lbs), hardest, mix,
@@ -3192,13 +3210,73 @@ function saveRecovery(){
   toast(r && r.score!=null ? `Saved. Readiness ${r.score}/100 (${readyWord(r.score)}).` : "Entry saved.");
 }
 
+const EXP_OPTS = [
+  ["never", "Never trained", 0],
+  ["u1",    "Under 1 year", 0.5],
+  ["1-3",   "1–3 years",    2],
+  ["3-7",   "3–7 years",    5],
+  ["7+",    "7+ years",     10],
+];
+function expToTrainStart(years){
+  if (!years) return null;
+  const d = new Date(Date.now() - years * 365.25 * 86400000);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+}
 function addClient(){
-  const name = prompt("Client name?");
-  if (!name || !name.trim()) return;
-  const id = name.trim().toLowerCase().replace(/\s+/g,"-");
-  if (S.clients.some(c=>c.id===id)){ toast("That client already exists"); return; }
-  S.clients.push({ id, name:name.trim(), profile:"", snapshot:zeroSnap(), sysFatigue:0, recovery:[], injuries:[], lastUpdated:todayISO(), sessions:[], prs:[], notes:[], nextPlan:"" });
-  save(); render(); toast(`${name.trim()} added`);
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  wrap.innerHTML = `<div class="modal"><h2 style="margin-top:0">New client</h2>
+    <input type="text" id="ncName" placeholder="Name" style="width:100%">
+    <div style="font-size:12px;color:#CFD3DC;margin-top:10px">Training experience <span style="color:var(--dim);font-size:10px">(calibrates fatigue + soreness modeling)</span></div>
+    <div class="row" style="gap:6px;margin-top:5px;flex-wrap:wrap">
+      ${EXP_OPTS.map(([k,l])=>`<button class="btn2 ncexp" data-e="${k}" style="flex:1 1 30%;font-size:12px;padding:8px 4px">${l}</button>`).join("")}
+    </div>
+    <div style="font-size:12px;color:#CFD3DC;margin-top:10px">Goals</div>
+    <input type="text" id="ncGoals" placeholder="e.g. fat loss, first pull-up, pain-free movement" style="width:100%;margin-top:4px">
+    <div style="font-size:12px;color:#CFD3DC;margin-top:10px">Payment</div>
+    <div class="row" style="gap:6px;margin-top:5px">
+      ${[["none","None yet"],["pack","Session pack"],["monthly","Monthly"]].map(([k,l],i)=>`<button class="btn2 grow ncpay" data-p="${k}" style="font-size:12px;${i===0?"border-color:var(--steel)":""}">${l}</button>`).join("")}
+    </div>
+    <div class="row" id="ncPackRow" style="gap:6px;margin-top:6px;display:none;align-items:center">
+      <span class="lbl">pack size</span><input type="number" id="ncPackSize" value="8" style="width:64px">
+      <span class="lbl">already used</span><input type="number" id="ncPackUsed" value="0" style="width:64px">
+    </div>
+    <div class="row" style="gap:8px;margin-top:14px">
+      <button class="btn grow" id="ncCreate">Create client</button>
+      <button class="btn2" id="ncCancel">Cancel</button></div>
+    <div class="muted" style="font-size:10px;margin-top:6px">Injuries and chronic issues get logged in their Injuries tab once they exist. Everything here is editable later via ⋯.</div></div>`;
+  document.body.appendChild(wrap);
+  let exp = null, payType = "none";
+  setTimeout(()=>{ const n = wrap.querySelector("#ncName"); if (n && n.focus) n.focus(); }, 50);
+  wrap.addEventListener("click", ev=>{
+    const eb = ev.target.closest(".ncexp");
+    if (eb){ exp = eb.dataset.e; wrap.querySelectorAll(".ncexp").forEach(b=>b.style.borderColor=""); eb.style.borderColor = "var(--steel)"; return; }
+    const pb = ev.target.closest(".ncpay");
+    if (pb){ payType = pb.dataset.p; wrap.querySelectorAll(".ncpay").forEach(b=>b.style.borderColor=""); pb.style.borderColor = "var(--steel)";
+      wrap.querySelector("#ncPackRow").style.display = payType === "pack" ? "flex" : "none"; return; }
+    if (ev.target === wrap || ev.target.id === "ncCancel"){ wrap.remove(); return; }
+    if (ev.target.id === "ncCreate"){
+      const name = wrap.querySelector("#ncName").value.trim();
+      if (!name){ toast("Give them a name first"); return; }
+      const id = name.toLowerCase().replace(/\s+/g,"-");
+      if (S.clients.some(c=>c.id===id)){ toast("That client already exists"); return; }
+      const c = { id, name, profile: wrap.querySelector("#ncGoals").value.trim(), snapshot:zeroSnap(), sysFatigue:0, recovery:[], injuries:[], lastUpdated:todayISO(), sessions:[], prs:[], notes:[], nextPlan:"" };
+      const opt = EXP_OPTS.find(o=>o[0]===exp);
+      if (opt){
+        if (opt[0] === "never"){ c.novTrust = true; }
+        else { const ts = expToTrainStart(opt[2]); if (ts) c.trainStart = ts; }
+      }
+      if (payType === "pack"){
+        const size = Math.max(1, parseInt(wrap.querySelector("#ncPackSize").value, 10) || 8);
+        const used = Math.max(0, parseInt(wrap.querySelector("#ncPackUsed").value, 10) || 0);
+        c.pay = { type:"pack", size, started: todayISO(), ...(used?{offset:used}:{}) };
+      } else if (payType === "monthly"){ c.pay = { type:"monthly" }; }
+      S.clients.push(c);
+      save(); wrap.remove();
+      view = { page:"client", clientId:id, tab:"fatigue" };
+      render(); toast(`${name} added${opt?` — ${opt[1].toLowerCase()}${opt[0]==="never"?" (soreness model fully trusted from day one)":""}`:""}`);
+    }
+  });
 }
 
 /* ---------------- Event wiring ---------------- */
