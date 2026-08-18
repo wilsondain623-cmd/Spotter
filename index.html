@@ -159,6 +159,8 @@ const EXERCISE_LIBRARY = [
   { name: "Nordic Curl", aliases: ["nordic curl","nordic curls","nordic ham curl","nordics"], p: ["hamstrings"], s: ["core"] },
   { name: "Leg Extension", aliases: ["leg extension","isometric leg extension"], p: ["quads"], s: [] },
   { name: "Calf Raise", aliases: ["calf raise","calf raises"], p: ["calves"], s: [] },
+  { name: "Adductor Machine", aliases: ["adductor machine","adductors machine","hip adduction","hip adductions","adduction machine"], p: ["adductors"], s: [] },
+  { name: "Copenhagen Plank", aliases: ["copenhagen plank","copenhagen planks","copenhagen","copenhagens"], p: ["adductors"], s: ["core"], hold: true },
   { name: "Bench Press", aliases: ["bench press","barbell bench","bench"], p: ["chest"], s: ["front-delts","triceps"] },
   { name: "DB Bench Press", aliases: ["db bench","dumbbell bench","db bench press","single arm db bench press"], p: ["chest"], s: ["front-delts","triceps"] },
   { name: "Machine Chest Press", aliases: ["machine chest press","chest press machine","chest press"], p: ["chest"], s: ["front-delts","triceps"] },
@@ -287,8 +289,9 @@ function applySession(snapshot, lastUpdated, sessionDate, exercises, tolF = 1) {
   const days = daysBetween(lastUpdated, sessionDate);
   const decayed = decaySnapshot(snapshot, days);
   const add = sessionFatigue(exercises);
+  const tf = typeof tolF === "function" ? tolF : () => tolF;
   const out = {};
-  for (const m of MUSCLES) out[m] = Math.min(CAP, decayed[m] + add[m] * DOMS_BUMP * tolF);
+  for (const m of MUSCLES) out[m] = Math.min(CAP, decayed[m] + add[m] * DOMS_BUMP * tf(m));
   return out;
 }
 
@@ -313,6 +316,7 @@ function sessionSys(exercises){
   return t;
 }
 function applySys(v, lastUpdated, date, exercises, tolF = 1){
+  if (typeof tolF === "function") tolF = tolF(null);
   const days = daysBetween(lastUpdated, date);
   return Math.min(CAP, v * Math.pow(SYS_DECAY, days) + sessionSys(exercises) * tolF);
 }
@@ -896,17 +900,65 @@ function layoffSpike(dateISO, sessions){
   if (d > 10) return 1;
   return Math.round((1 + 0.2 * (1 - d / 10)) * 1000) / 1000;
 }
-function tolFactorAt(c, dateISO, sessions){
-  const spike = layoffSpike(dateISO, sessions || c.sessions);
+function ageFactorAt(c, dateISO, sessions){
   const y = trainingYears(c, dateISO);
-  if (!y) return spike;
+  if (!y) return 1;
   const adapt = 0.20 * (1 - Math.exp(-y / 4)); /* diminishing returns, ~cap by 10y */
   /* consistency gate: session count in the 28 days before this date */
   const cut = new Date(new Date(dateISO + "T00:00:00") - 28 * 86400000);
   const cutISO = cut.getFullYear() + "-" + String(cut.getMonth() + 1).padStart(2, "0") + "-" + String(cut.getDate()).padStart(2, "0");
   const n = (sessions || c.sessions).filter(s => s.date > cutISO && s.date <= dateISO).length;
   const gate = n >= 8 ? 1 : n >= 4 ? 0.75 : 0.5; /* never below half credit — history still counts */
-  return Math.round((1 - adapt * gate) * spike * 1000) / 1000;
+  return Math.round((1 - adapt * gate) * 1000) / 1000;
+}
+function tolFactorAt(c, dateISO, sessions){
+  return Math.round(ageFactorAt(c, dateISO, sessions) * layoffSpike(dateISO, sessions || c.sessions) * 1000) / 1000;
+}
+
+/* ---- per-muscle novelty (repeated bout effect): protection is muscle-specific
+   and decays with weeks away from DIRECT work; one bout restores it ---- */
+const NOV_CAP = 1.35, NOV_FREE_DAYS = 14, NOV_RAMP_DAYS = 28, NOV_MIN_SETS = 2;
+function exposureSets(items, m){
+  let n = 0;
+  for (const it of items){
+    const sets = it.setDetail ? it.setDetail.length : (it.sets || 1);
+    if ((it.primary||[]).includes(m)) n += sets;
+    else if ((it.secondary||[]).includes(m)) n += 0.5 * sets;
+  }
+  return n;
+}
+function noveltyFromDays(d){
+  if (d == null) return NOV_CAP;
+  if (d <= NOV_FREE_DAYS) return 1;
+  return Math.round((1 + (NOV_CAP - 1) * Math.min(1, (d - NOV_FREE_DAYS) / NOV_RAMP_DAYS)) * 1000) / 1000;
+}
+/* hist = [{date, items}] ascending, items with primary/secondary resolved */
+function noveltyLookup(hist, dateISO){
+  const memo = {};
+  const prior = hist.filter(h => h.date < dateISO);
+  return m => {
+    if (memo[m] != null) return memo[m];
+    let f;
+    if (prior.length < 3){ f = 1; } /* new client — base model already calibrated for novices */
+    else {
+      let last = null;
+      for (let i = prior.length - 1; i >= 0; i--){ if (exposureSets(prior[i].items, m) >= NOV_MIN_SETS){ last = prior[i].date; break; } }
+      f = noveltyFromDays(last == null ? null : E.daysBetween(last, dateISO));
+    }
+    memo[m] = f;
+    return f;
+  };
+}
+/* public probe: days since last direct work + factor, for warnings/summary */
+function muscleNovelty(c, m, dateISO){
+  const hist = c.sessions.filter(s => s.exercises && s.exercises.length && s.date < dateISO)
+    .sort((a,b)=>a.date.localeCompare(b.date))
+    .map(s => ({ date: s.date, items: s.exercises.map(x => { const mm = exMuscles(x.name); return { ...x, primary: mm.p, secondary: mm.s }; }) }));
+  if (hist.length < 3) return { days: null, factor: 1, novice: true };
+  let last = null;
+  for (let i = hist.length - 1; i >= 0; i--){ if (exposureSets(hist[i].items, m) >= NOV_MIN_SETS){ last = hist[i].date; break; } }
+  const days = last == null ? null : E.daysBetween(last, dateISO);
+  return { days, factor: noveltyFromDays(days) };
 }
 function packUsed(c){ const p=c.pay; if (!p||p.type!=="pack"||!p.started) return 0; return (p.offset||0) + c.sessions.filter(s=>!s.solo && s.date>=p.started).length; }
 function checkPackRenewal(c){
@@ -1003,7 +1055,9 @@ function fetchAssess(){
       if (Array.isArray(d)){ S.aiAssess = {}; for (const a of d) if (a && a.c && a.i) S.aiAssess[a.c+":"+a.i] = a; save(); render(); }
     }).catch(()=>{});
 }
+let _novMemo = {};
 function render(){
+  _novMemo = {};
   persistDraft();
   const app = $("#app");
   if (view.page === "review") app.innerHTML = reviewView();
@@ -1603,8 +1657,26 @@ function draftItemHtml(it, i){
   }
   const _injSet = injuredMuscles(activeDraftClient()||client()||{});
   const _hitInj = !it.unmatched ? [...(it.primary||[]), ...(it.secondary||[])].filter(m=>_injSet.has(m)) : [];
+  let _novWarn = "";
+  if (!it.unmatched && it.band === undefined){
+    const _nc = activeDraftClient() || client();
+    if (_nc){
+      for (const m of (it.primary||[])){
+        const key = _nc.id + "|" + m + "|" + draftDate;
+        if (!(key in _novMemo)) _novMemo[key] = muscleNovelty(_nc, m, draftDate || todayISO());
+        const nv = _novMemo[key];
+        if (nv.factor >= 1.15){
+          _novWarn = nv.days == null
+            ? `first direct ${m} work on record — expect outsized soreness, start conservative (fatigue counted ×${nv.factor})`
+            : `first direct ${m} work in ${nv.days}d — expect outsized soreness, consider easing volume (fatigue counted ×${nv.factor})`;
+          break;
+        }
+      }
+    }
+  }
   return `<div class="draft-item ${it.unmatched?"bad":""}" ${_hitInj.length?`style="border-color:${INJ_COLOR}"`:""}>
     ${_hitInj.length?`<div style="color:#e3c8ec;font-size:11px;font-weight:800;margin-bottom:4px">⚠ loads injured: ${_hitInj.join(", ")}</div>`:""}
+    ${_novWarn?`<div style="color:#e0c48a;font-size:11px;font-weight:800;margin-bottom:4px">⚠ ${_novWarn}</div>`:""}
     <div class="row"><div class="grow">
       <div class="d-name">${esc(it.unmatched?("? "+it.raw):it.name)}</div>
       <div class="d-meta">${it.unmatched?"exercise not recognized":esc((it.primary||[]).join(", ")+((it.secondary||[]).length?" · +"+it.secondary.join(", "):""))}${it.assumedSets?" · sets assumed":""}</div>
@@ -2546,12 +2618,17 @@ function exMuscles(name){
 function rebuildClient(c){
   const structured = c.sessions.filter(s=>s.exercises && s.exercises.length).sort((a,b)=>a.date.localeCompare(b.date));
   let snap = zeroSnap(), last = "2026-06-22", sys = 0;
+  const _hist = [];
   if (structured.length && structured[0].date < last) last = structured[0].date;
   for (const s of structured){
     const items = s.exercises.map(x=>{ const m = exMuscles(x.name); return { ...x, primary:m.p, secondary:m.s, sys:m.sys }; });
-    const tf = tolFactorAt(c, s.date, structured);
+    const ageF = ageFactorAt(c, s.date, structured);
+    const spike = layoffSpike(s.date, structured);
+    const nov = noveltyLookup(_hist, s.date);
+    const tf = m => m == null ? ageF * spike : ageF * Math.max(spike, nov(m));
     sys = E.applySys(sys, last, s.date, items, tf);
     snap = E.applySession(snap, last, s.date, items, tf);
+    _hist.push({ date: s.date, items });
     last = s.date;
   }
   c.snapshot = snap; c.sysFatigue = sys; c.lastUpdated = last;
@@ -2659,6 +2736,17 @@ function buildSummary(c, items, date, title, prs, before, after, sysB, sysA){
     flags.push({ t:`Loaded near ${inj?esc(inj.label):"an injury"} (${hitInj.join(", ")}) — worth a pain check-in tomorrow`, col:"#e3c8ec" }); }
   const spike = layoffSpike(date, c.sessions);
   if (spike > 1.01) flags.push({ t:`Back from a layoff — fatigue counted ×${Math.round(spike*100)/100} this session`, col:"#e0c48a" });
+  const novSeen = new Set();
+  for (const it of items){
+    if (it.band !== undefined) continue;
+    for (const m of (it.primary||[])){
+      if (novSeen.has(m)) continue;
+      novSeen.add(m);
+      const nv = muscleNovelty(c, m, date);
+      if (nv.factor >= 1.15 && nv.factor > spike)
+        flags.push({ t:`${m}: first direct work in ${nv.days == null ? "recorded history" : nv.days + " days"} — fatigue counted ×${nv.factor} (muscle-specific soreness protection fades without exposure)`, col:"#e0c48a" });
+    }
+  }
   if (c.photoLog && c.photoLog.length){ const dsince = E.daysBetween(c.photoLog[c.photoLog.length-1], todayISO());
     if (dsince > 30) flags.push({ t:`Progress photos due — last set ${dsince} days ago`, col:"#e0c48a" }); }
   return { name:c.name, date, title, prs, deltas: deltas.slice(0,6), ex: items.length, sets, lbs: Math.round(lbs), hardest, mix,

@@ -95,6 +95,8 @@ const EXERCISE_LIBRARY = [
   { name: "Nordic Curl", aliases: ["nordic curl","nordic curls","nordic ham curl","nordics"], p: ["hamstrings"], s: ["core"] },
   { name: "Leg Extension", aliases: ["leg extension","isometric leg extension"], p: ["quads"], s: [] },
   { name: "Calf Raise", aliases: ["calf raise","calf raises"], p: ["calves"], s: [] },
+  { name: "Adductor Machine", aliases: ["adductor machine","adductors machine","hip adduction","hip adductions","adduction machine"], p: ["adductors"], s: [] },
+  { name: "Copenhagen Plank", aliases: ["copenhagen plank","copenhagen planks","copenhagen","copenhagens"], p: ["adductors"], s: ["core"], hold: true },
   { name: "Bench Press", aliases: ["bench press","barbell bench","bench"], p: ["chest"], s: ["front-delts","triceps"] },
   { name: "DB Bench Press", aliases: ["db bench","dumbbell bench","db bench press","single arm db bench press"], p: ["chest"], s: ["front-delts","triceps"] },
   { name: "Machine Chest Press", aliases: ["machine chest press","chest press machine","chest press"], p: ["chest"], s: ["front-delts","triceps"] },
@@ -223,8 +225,9 @@ function applySession(snapshot, lastUpdated, sessionDate, exercises, tolF = 1) {
   const days = daysBetween(lastUpdated, sessionDate);
   const decayed = decaySnapshot(snapshot, days);
   const add = sessionFatigue(exercises);
+  const tf = typeof tolF === "function" ? tolF : () => tolF;
   const out = {};
-  for (const m of MUSCLES) out[m] = Math.min(CAP, decayed[m] + add[m] * DOMS_BUMP * tolF);
+  for (const m of MUSCLES) out[m] = Math.min(CAP, decayed[m] + add[m] * DOMS_BUMP * tf(m));
   return out;
 }
 
@@ -249,6 +252,7 @@ function sessionSys(exercises){
   return t;
 }
 function applySys(v, lastUpdated, date, exercises, tolF = 1){
+  if (typeof tolF === "function") tolF = tolF(null);
   const days = daysBetween(lastUpdated, date);
   return Math.min(CAP, v * Math.pow(SYS_DECAY, days) + sessionSys(exercises) * tolF);
 }
