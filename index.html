@@ -1126,11 +1126,12 @@ function reviewView(){
       if (prog) for (const d of prog.days) for (const it of d.items) tmap[E.normalize(it.name)] = it;
       const rows = s.items.map(it=>{
         const t2 = tmap[E.normalize(it.name)];
-        const tgt = t2 ? `${t2.sets}×${t2.reps}${t2.tw?` @ ${t2.tw}`:""}` : "—";
+        const tgt = t2 ? ((t2.tsets && t2.tsets.length) ? t2.tsets.map(s2=>`${s2.w??"–"}×${s2.r??"?"}`).join(", ") : `${t2.sets}×${t2.reps}${t2.tw?` @ ${t2.tw}`:""}`) : "—";
         const did = it.skipped ? `<span style="color:#e0a8a8">skipped</span>`
           : it.setDetail ? it.setDetail.map(sd=>`${sd.weight!=null?sd.weight+"×":""}${sd.reps||"?"}`).join(", ")
           : `${it.sets}×${it.reps||"?"}${it.weight?` @ ${it.weight}`:""}`;
-        const hit = !it.skipped && t2 && t2.tw && ((it.weight||0) >= t2.tw || (it.setDetail||[]).some(sd=>(sd.weight||0) >= t2.tw));
+        const tW = t2 && (t2.tw || Math.max(0, ...((t2.tsets||[]).map(s2=>s2.w||0))));
+        const hit = !it.skipped && tW && ((it.weight||0) >= tW || (it.setDetail||[]).some(sd=>(sd.weight||0) >= tW));
         return `<div style="font-size:12px;padding:5px 0;border-bottom:1px solid var(--line)">
           <b>${esc(it.name)}</b>${hit?" <span style=\"color:#7dc98f\">✓ target</span>":""}
           <div style="color:var(--dim);font-size:11px">target ${esc(tgt)} → did ${did}${it.note?` · ${esc(it.note)}`:""}</div></div>`;
@@ -3089,6 +3090,19 @@ function parseProgram(html){
   const name = (html.match(/<title>([^<]+)</i) || [])[1] || "Program";
   return days.length ? { name: name.trim(), days } : null;
 }
+function renderProgramHtml(p, cname){
+  const tgt = it => (it.tsets && it.tsets.length)
+    ? it.tsets.map(s2=>`${s2.w??"—"}×${s2.r??"?"}${s2.i?" "+s2.i:""}`).join(", ")
+    : `${it.sets} × ${esc(it.reps||"?")}${it.tw?` @ ${it.tw} lbs`:""}${it.ti?` · ${it.ti}`:""}`;
+  const day = d => `<h2>${esc(d.label)}</h2>` + d.items.map(it=>`<div class="exb"><h3>${esc(it.name)}${it.perSide?" · each side":""}</h3>
+      <div class="t">${tgt(it)}${it.rest?` · rest ${esc(it.rest)}`:""}</div>
+      ${it.note?`<div class="t">${esc(it.note)}</div>`:""}
+      ${it.cues&&it.cues.length?`<ol>${it.cues.map(c2=>`<li>${esc(c2)}</li>`).join("")}</ol>`:""}
+      ${it.mistakes&&it.mistakes.length?`<div class="lbl">Common mistakes</div><ul>${it.mistakes.map(m2=>`<li>${esc(m2)}</li>`).join("")}</ul>`:""}</div>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(p.name||"Program")}</title>
+  <style>body{background:#0A0E18;color:#F4F4F5;font-family:system-ui,-apple-system,sans-serif;margin:0 auto;padding:24px;line-height:1.6;max-width:640px}h1{color:#A8C4E0;font-size:24px}h2{color:#4D7DB4;margin-top:28px;font-size:18px}h3{margin:18px 0 2px;font-size:16px}.t{color:#8b93a5;font-size:14px}.lbl{color:#e0c48a;font-size:13px;font-weight:700;margin-top:6px}ol,ul{margin:6px 0;padding-left:20px;color:#CFD3DC;font-size:14px}.exb{border-bottom:1px solid #232c42;padding-bottom:14px}</style></head>
+  <body><h1>${esc(p.name||"Program")}</h1><div class="t">Dwil Fitness${cname?` · ${esc(cname)}`:""}</div>${p.days.map(day).join("")}</body></html>`;
+}
 function uploadProgramHtml(c, html){
   if (!S.syncUrl || !S.syncKey) return Promise.resolve(false);
   return fetch(`${S.syncUrl.replace(/\/+$/,"")}/program?c=${encodeURIComponent(c.id)}&key=${encodeURIComponent(S.syncKey)}`,
@@ -3124,9 +3138,11 @@ function programMenu(c){
       p.assigned = todayISO();
       const unmatched = [];
       for (const d of p.days) for (const it of d.items){ if (!E.matchExercise(it.name, S.customExercises)) unmatched.push(it.name); }
+      const isFullDoc = /<body[\s>]/i.test(html);
+      if (!isFullDoc) p.gen = true; /* we generated the client-facing doc — regenerate when targets change */
       c.program = p; save(); autoBackup(true);
       const btn = wrap.querySelector("#pgImport"); btn.textContent = "Uploading full program…"; btn.disabled = true;
-      uploadProgramHtml(c, html).then(ok=>{
+      uploadProgramHtml(c, isFullDoc ? html : renderProgramHtml(p, c.name)).then(ok=>{
         wrap.remove(); render();
         toast(`Program assigned — ${p.days.length} day${p.days.length>1?"s":""}${ok?", illustrated version uploaded":""}${unmatched.length?`. Unknown exercises (assign muscles on first approve): ${unmatched.join(", ")}`:""}`);
         programTargets(c);
@@ -3139,12 +3155,26 @@ function programTargets(c){
   const wrap = document.createElement("div");
   wrap.className = "modal-bg";
   const rows = p.days.map((d,di)=>`<div style="font-size:12px;font-weight:800;color:var(--ice);margin-top:${di?10:0}px">${esc(d.label)}</div>`
-    + d.items.map((it,ii)=>`<div class="minirow" style="align-items:center">
+    + d.items.map((it,ii)=>{
+      const psRows = Array.from({length: Math.max(1, it.sets||3)}, (_,si)=>{
+        const ts = (it.tsets||[])[si] || {};
+        return `<div class="minirow" style="align-items:center;margin-left:14px">
+          <span class="lbl" style="width:34px;font-size:10px">set ${si+1}</span>
+          <input type="number" inputmode="decimal" style="width:60px" value="${ts.w??""}" placeholder="lbs" data-ptsw="${di}:${ii}:${si}">
+          <input type="text" style="width:52px" value="${esc(ts.r??"")}" placeholder="reps" data-ptsr="${di}:${ii}:${si}">
+          <select data-ptsi="${di}:${ii}:${si}" style="width:88px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:11px;padding:5px 3px">
+            ${["","warmup","moderate","heavy","max"].map(k=>`<option value="${k}" ${((ts.i||"")===k)?"selected":""}>${k||"↳ effort"}</option>`).join("")}
+          </select></div>`;
+      }).join("");
+      return `<div class="minirow" style="align-items:center">
       <div class="grow" style="min-width:0;font-size:12px">${esc(it.name)} <span style="color:var(--dim);font-size:11px">${it.sets}×${esc(it.reps)}</span></div>
       <input type="number" inputmode="decimal" style="width:64px" value="${it.tw??""}" placeholder="lbs" data-ptw="${di}:${ii}">
-      <select data-pti="${di}:${ii}" style="width:96px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px;padding:6px 4px">
+      <select data-pti="${di}:${ii}" style="width:88px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px;padding:6px 4px">
         ${["","warmup","moderate","heavy","max"].map(k=>`<option value="${k}" ${((it.ti||"")===k)?"selected":""}>${k||"— effort —"}</option>`).join("")}
-      </select></div>`).join("")).join("");
+      </select>
+      <button class="btn-sm" data-ptx="${di}:${ii}" style="font-size:10px">${it.tsets&&it.tsets.length?"per-set ▾":"per-set…"}</button></div>
+      <div data-ptbody="${di}:${ii}" style="display:${it.tsets&&it.tsets.length?"block":"none"}">${psRows}</div>`;
+    }).join("")).join("");
   wrap.innerHTML = `<div class="modal" style="max-height:86vh;overflow-y:auto"><h2 style="margin-top:0">Targets — ${esc(c.name)}</h2>
     <div class="muted" style="font-size:11px;margin-bottom:8px">Optional per exercise. Weight targets show on the client's card when set; leave blank when you don't know their numbers yet.</div>
     ${rows}
@@ -3152,12 +3182,33 @@ function programTargets(c){
   document.body.appendChild(wrap);
   wrap.addEventListener("click", ev=>{
     if (ev.target===wrap){ wrap.remove(); return; }
+    const px = ev.target.closest("[data-ptx]");
+    if (px){ const body = wrap.querySelector(`[data-ptbody="${px.dataset.ptx}"]`);
+      const open = body.style.display !== "none";
+      body.style.display = open ? "none" : "block";
+      px.textContent = open ? "per-set…" : "per-set ▾"; return; }
     if (ev.target.id==="ptSave"){
       wrap.querySelectorAll("[data-ptw]").forEach(inp=>{ const [di,ii]=inp.dataset.ptw.split(":").map(Number);
         const v = parseFloat(inp.value); if (v) p.days[di].items[ii].tw = v; else delete p.days[di].items[ii].tw; });
       wrap.querySelectorAll("[data-pti]").forEach(sel=>{ const [di,ii]=sel.dataset.pti.split(":").map(Number);
         if (sel.value) p.days[di].items[ii].ti = sel.value; else delete p.days[di].items[ii].ti; });
-      save(); autoBackup(true); wrap.remove(); toast("Targets saved — clients see them next time they open their link");
+      /* per-set targets: keep only when the panel is open AND has any value */
+      const tmpTs = {};
+      wrap.querySelectorAll("[data-ptsw]").forEach(inp=>{ const k=inp.dataset.ptsw; const [di,ii,si]=k.split(":").map(Number);
+        (tmpTs[di+":"+ii] = tmpTs[di+":"+ii] || [])[si] = { w: parseFloat(inp.value)||undefined }; });
+      wrap.querySelectorAll("[data-ptsr]").forEach(inp=>{ const [di,ii,si]=inp.dataset.ptsr.split(":").map(Number);
+        const e2 = (tmpTs[di+":"+ii]||[])[si]; if (e2 && inp.value.trim()) e2.r = inp.value.trim(); });
+      wrap.querySelectorAll("[data-ptsi]").forEach(sel=>{ const [di,ii,si]=sel.dataset.ptsi.split(":").map(Number);
+        const e2 = (tmpTs[di+":"+ii]||[])[si]; if (e2 && sel.value) e2.i = sel.value; });
+      for (const k in tmpTs){ const [di,ii] = k.split(":").map(Number);
+        const body = wrap.querySelector(`[data-ptbody="${di}:${ii}"]`);
+        const arr = tmpTs[k].map(e2=>e2||{});
+        const any = arr.some(e2=>e2.w!=null||e2.r||e2.i);
+        if (any && body && body.style.display !== "none") p.days[di].items[ii].tsets = arr;
+        else delete p.days[di].items[ii].tsets; }
+      save(); autoBackup(true); wrap.remove();
+      if (p.gen) uploadProgramHtml(c, renderProgramHtml(p, c.name));
+      toast("Targets saved — clients see them next time they open their link");
     }
   });
 }

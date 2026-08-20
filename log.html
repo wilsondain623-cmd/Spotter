@@ -738,16 +738,26 @@ function workoutView(){
   const cards = day.items.map((it,ii)=>{
     const skipped = !!progSkip[ii];
     const prev = acts[it.name] || null;
-    const nSets = it.sets || 3;
-    const tline = `${it.sets} sets × ${esc(it.reps)}${it.tw?` · goal ${it.tw} lbs`:""}${it.ti?` · ${it.ti} effort`:""}${it.rest?` · rest ${esc(it.rest)}`:""}${it.perSide?" · each side":""}`;
+    const ts = it.tsets && it.tsets.length ? it.tsets : null;
+    const nSets = ts ? ts.length : (it.sets || 3);
+    const tline = ts
+      ? `Targets: ${ts.map(s2=>`${s2.w??"—"}×${s2.r??"?"}`).join(", ")}${it.rest?` · rest ${esc(it.rest)}`:""}${it.perSide?" · each side":""}`
+      : `${it.sets} sets × ${esc(it.reps)}${it.tw?` · goal ${it.tw} lbs`:""}${it.ti?` · ${it.ti} effort`:""}${it.rest?` · rest ${esc(it.rest)}`:""}${it.perSide?" · each side":""}`;
+    const defEff = progEff[ii] || it.ti || "moderate";
     const rows = skipped ? "" : Array.from({length:nSets},(_,si)=>{
-      const pw = prev && prev[si] ? prev[si].w : (it.tw||"");
+      const t2 = ts ? ts[si] || {} : {};
+      const pw = prev && prev[si] ? prev[si].w : (t2.w ?? it.tw ?? "");
       const pr = prev && prev[si] ? prev[si].r : "";
-      return `<div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+      const sel = progSetEff[ii+":"+si] || "";
+      return `<div style="display:flex;gap:6px;align-items:center;margin-top:6px">
         <span style="color:var(--dim);font-size:11px;width:34px">set ${si+1}</span>
-        <input type="number" inputmode="decimal" id="w-${ii}-${si}" value="${pw}" placeholder="lbs" style="width:80px;margin:0">
+        <input type="number" inputmode="decimal" id="w-${ii}-${si}" value="${pw}" placeholder="${t2.w??"lbs"}" style="width:72px;margin:0">
         <span style="color:var(--dim)">×</span>
-        <input type="number" inputmode="numeric" id="r-${ii}-${si}" value="${pr}" placeholder="reps" style="width:74px;margin:0"></div>`;
+        <input type="number" inputmode="numeric" id="r-${ii}-${si}" value="${pr}" placeholder="${t2.r??"reps"}" style="width:64px;margin:0">
+        <select id="e-${ii}-${si}" style="width:86px;margin:0;background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:${sel?"var(--text)":"var(--dim)"};font-size:11px;padding:8px 4px">
+          <option value="" ${sel?"":"selected"}>↳ ${(EFFORTS.find(e2=>e2[0]===(t2.i||defEff))||["","solid"])[1]}</option>
+          ${EFFORTS.map(([k,l])=>`<option value="${k}" ${sel===k?"selected":""}>${l}</option>`).join("")}
+        </select></div>`;
     }).join("");
     const howto = (it.cues && it.cues.length) ? `<div style="margin-top:8px">
       <button style="background:none;border:none;color:var(--steel);font-size:12px;padding:0;cursor:pointer" data-how="${ii}">${progExpanded[ii]?"▾ Hide":"▸ How to do it"}</button>
@@ -772,27 +782,35 @@ function workoutView(){
       <button class="btn" id="woSend" style="margin-top:10px">Send workout to coach</button>
       <div class="muted" style="margin-top:8px">Weights are pre-filled from last time — just fix what changed. Did something outside the plan (pickup game, buddy workout)? Log it in the <b>Log</b> tab so your recovery stays accurate.</div></div>`;
 }
-let progEff = {}; /* per-exercise effort override */
+let progEff = {}; /* per-exercise default effort */
+let progSetEff = {}; /* per-set effort override "ex:set" -> intensity */
 function sendWorkout(){
   const p = me && me.program; if (!p) return;
   const day = p.days[progDay] || p.days[0];
-  const items = []; const acts = actsGet(); const lines = [];
+  const items = []; const acts = actsGet(); const lines = []; const needReps = [];
   day.items.forEach((it,ii)=>{
     if (progSkip[ii]){ items.push({ name: it.name, skipped: true }); lines.push(it.name + " — skipped"); return; }
+    const ts = it.tsets && it.tsets.length ? it.tsets : null;
+    const nSets = ts ? ts.length : (it.sets || 3);
     const sd = []; const rem = [];
-    for (let si=0; si<(it.sets||3); si++){
+    for (let si=0; si<nSets; si++){
       const w = parseFloat((app.querySelector("#w-"+ii+"-"+si)||{}).value);
-      const r = (app.querySelector("#r-"+ii+"-"+si)||{}).value.trim();
-      if (r) { sd.push({ weight: isNaN(w)?null:w, reps: r }); rem.push({ w: isNaN(w)?"":w, r }); }
+      const r = ((app.querySelector("#r-"+ii+"-"+si)||{}).value||"").trim();
+      if (!r && isNaN(w)) continue;
+      if (!r){ needReps.push(`${it.name} set ${si+1}`); continue; }
+      const se = progSetEff[ii+":"+si] || "";
+      sd.push({ weight: isNaN(w)?null:w, reps: r, ...(se?{intensity:se}:{}) });
+      rem.push({ w: isNaN(w)?"":w, r });
     }
     if (!sd.length){ items.push({ name: it.name, skipped: true }); lines.push(it.name + " — skipped"); return; }
     const eff = progEff[ii] || it.ti || "moderate";
     const wts = sd.map(x=>x.weight).filter(x=>x!=null);
     items.push({ name: it.name, sets: sd.length, reps: sd.map(x=>x.reps).join("/"),
       weight: wts.length?Math.max(...wts):null, intensity: eff, setDetail: sd, ...(wts.length?{}:{bw:true}) });
-    lines.push(`${it.name} ${sd.map(x=>`${x.weight!=null?x.weight+"×":""}${x.reps}`).join(", ")} (${eff})`);
+    lines.push(`${it.name} ${sd.map(x=>`${x.weight!=null?x.weight+"×":""}${x.reps}${x.intensity&&x.intensity!==eff?" "+x.intensity:""}`).join(", ")} (${eff})`);
     acts[it.name] = rem;
   });
+  if (needReps.length){ alert("Add reps for: " + needReps.join(", ") + ".\nWeight without reps can't be counted — or clear the weight to skip that set."); return; }
   if (!items.some(it=>!it.skipped)){ alert("Enter at least one exercise (or use the Log tab)"); return; }
   const btn = app.querySelector("#woSend"); btn.disabled = true; btn.textContent = "Sending…";
   const date = (app.querySelector("#woDate")||{}).value || todayISO();
@@ -869,6 +887,7 @@ function render(){
     app.querySelectorAll("[data-how]").forEach(b=>b.addEventListener("click", ()=>{ const k=+b.dataset.how; progExpanded[k]=!progExpanded[k]; render(); }));
     app.querySelectorAll("[data-skip]").forEach(b=>b.addEventListener("click", ()=>{ const k=+b.dataset.skip; progSkip[k]=!progSkip[k]; if(!progSkip[k])delete progSkip[k]; render(); }));
     app.querySelectorAll("[data-eff]").forEach(b=>b.addEventListener("click", ()=>{ const [k,v]=b.dataset.eff.split(":"); progEff[+k]=v; render(); }));
+    app.querySelectorAll("select[id^='e-']").forEach(s2=>s2.addEventListener("change", ()=>{ const [,a,b2]=s2.id.split("-"); if (s2.value) progSetEff[a+":"+b2]=s2.value; else delete progSetEff[a+":"+b2]; }));
     const ws = app.querySelector("#woSend"); if (ws) ws.addEventListener("click", sendWorkout);
     const wa = app.querySelector("#woAgain"); if (wa) wa.addEventListener("click", ()=>{ progSent=false; progSkip={}; progEff={}; progDay=null; render(); });
     return;
