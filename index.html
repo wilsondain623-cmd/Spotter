@@ -2997,6 +2997,8 @@ function settingsMenu(){
       <div class="muted" style="margin-bottom:8px">${(function(){ const ts=+(store.getItem("dwil-backup-ts")||0);
         if (!S.syncUrl||!S.syncKey) return "Set the sync server above and your data backs up automatically about once a day.";
         return ts ? "Last cloud backup: " + new Date(ts).toLocaleString() + " — runs automatically about once a day." : "No cloud backup yet — it runs automatically, or tap Back up now."; })()}</div>
+      ${S.syncPending?`<div style="background:#2a2416;border:1px solid #d4a04d66;border-radius:10px;padding:8px 10px;font-size:12px;color:#e0c48a;margin-bottom:8px">⚠ This device hasn't chosen a sync direction yet — auto-backup is paused so nothing gets overwritten.
+        <button class="btn2" style="width:100%;margin-top:6px" id="mResolve">Resolve now</button></div>`:""}
       <button class="btn2" style="width:100%" id="mBackupNow">Back up now</button>
       <button class="btn2" style="width:100%;margin-top:8px" id="mRestore">Restore from cloud backup</button>
     </div>
@@ -3008,7 +3010,8 @@ function settingsMenu(){
     if (e.target===wrap) wrap.remove();
     if (e.target.id==="mExport") exportJSON();
     if (e.target.id==="mImport") wrap.querySelector("#mFile").click();
-    if (e.target.id==="mSyncSave"){ S.syncUrl = wrap.querySelector("#mSyncUrl").value.trim(); S.syncKey = wrap.querySelector("#mSyncKey").value.trim(); save(); syncExLib(); autoBackup(true); toast("Sync settings saved"); }
+    if (e.target.id==="mSyncSave"){ S.syncUrl = wrap.querySelector("#mSyncUrl").value.trim(); S.syncKey = wrap.querySelector("#mSyncKey").value.trim(); save(); wrap.remove(); syncSettingsSaved(); }
+    if (e.target.id==="mResolve"){ wrap.remove(); syncSettingsSaved(); }
     if (e.target.id==="mBackupNow") autoBackup(true);
     if (e.target.id==="mRestore"){ wrap.remove(); restoreBackup(); }
     if (e.target.id==="mReset") appConfirm("Replace ALL data with the original seed? Export first if unsure.", ()=>{ S=seedState(); save(); wrap.remove(); render(); }, {yes:"Replace", danger:true});
@@ -3411,6 +3414,7 @@ function rejectSub(idx){
 
 function autoBackup(force){
   if (!S.syncUrl || !S.syncKey || _backupBusy) return;
+  if (S.syncPending){ if (force) toast("Auto-backup is paused — resolve the cloud/device choice in ⛭ first"); return; }
   const last = +(store.getItem("dwil-backup-ts")||0);
   if (!force && Date.now() - last < 20*3600*1000) return;
   _backupBusy = true;
@@ -3423,6 +3427,16 @@ function autoBackup(force){
     else if (force) toast("Backup failed: " + ((d&&d.error)||"unknown"));
   }).catch(()=>{ _backupBusy = false; if (force) toast("Backup failed — network"); });
 }
+function adoptCloudState(d){
+  const keepUrl = S.syncUrl, keepKey = S.syncKey;
+  S = d.state;
+  S.syncUrl = S.syncUrl || keepUrl; S.syncKey = S.syncKey || keepKey;
+  delete S.syncPending;
+  store.setItem(LS_KEY, JSON.stringify(S));
+  store.setItem("dwil-backup-ts", String(Date.now()));
+  view = { page:"roster", clientId:null, tab:"brief" };
+  render();
+}
 function restoreBackup(){
   if (!S.syncUrl || !S.syncKey){ toast("Set the sync server in ⛭ first"); return; }
   fetch(`${S.syncUrl.replace(/\/+$/,"")}/backup?key=${encodeURIComponent(S.syncKey)}`)
@@ -3430,9 +3444,50 @@ function restoreBackup(){
       if (!d || d.error || !d.state){ toast("No cloud backup found yet"); return; }
       const when = String(d.saved||"").replace("T"," ").slice(0,16);
       appConfirm(`Replace ALL data on this device with the cloud backup from ${when}?`, ()=>{
-        S = d.state; store.setItem(LS_KEY, JSON.stringify(S)); render(); toast("Restored from cloud backup"); }, {yes:"Restore", danger:true});
+        adoptCloudState(d); toast("Restored from cloud backup"); }, {yes:"Restore", danger:true});
       return;
     }).catch(()=>toast("Could not reach the backup server"));
+}
+/* Fresh-device guard: connecting sync on a device that has never backed up, while a
+   cloud backup exists, must never silently overwrite the cloud. */
+function syncSettingsSaved(){
+  if (!S.syncUrl || !S.syncKey){ toast("Sync settings saved"); return; }
+  const seenTs = +(store.getItem("dwil-backup-ts")||0);
+  if (seenTs){ delete S.syncPending; save(); syncExLib(); autoBackup(true); toast("Sync settings saved"); return; }
+  S.syncPending = true; save();
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/backup?key=${encodeURIComponent(S.syncKey)}`)
+    .then(r=>r.json()).then(d=>{
+      if (!d || d.error || !d.state || !Array.isArray(d.state.clients)){
+        /* nothing in the cloud — this device is the source of truth */
+        delete S.syncPending; save(); syncExLib(); autoBackup(true); toast("Sync connected — first cloud backup saved");
+        return;
+      }
+      syncChoiceModal(d);
+    }).catch(()=>{ toast("Saved — couldn't reach the server yet. Auto-backup stays paused until this device picks a direction (⛭)."); });
+}
+function syncChoiceModal(d){
+  const when = String(d.saved||"").replace("T"," ").slice(0,16);
+  const n = d.state.clients.length;
+  const localN = (S.clients||[]).length;
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  wrap.innerHTML = `<div class="modal" style="max-width:360px"><h2 style="margin-top:0">Which data wins?</h2>
+    <div style="font-size:13px;line-height:1.6;color:#CFD3DC">This device just connected to sync, and a cloud backup already exists:<br>
+      <b style="color:var(--ice)">Cloud:</b> ${n} client${n===1?"":"s"}, saved ${when}<br>
+      <b style="color:var(--ice)">This device:</b> ${localN} client${localN===1?"":"s"} (never backed up)</div>
+    <button class="btn" style="width:100%;margin-top:12px" id="scUse">⬇ Use the cloud data here (recommended)</button>
+    <button class="btn2" style="width:100%;margin-top:8px;color:#e0a8a8" id="scPush">⬆ Overwrite the cloud with THIS device</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="scLater">Decide later</button>
+    <div class="muted" style="font-size:10px;margin-top:6px">Until you choose, this device won't back up — your cloud data is safe either way (the previous backup is always kept one step back).</div></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", ev=>{
+    if (ev.target===wrap || ev.target.id==="scLater"){ wrap.remove(); toast("Auto-backup stays paused — resolve anytime in ⛭"); return; }
+    if (ev.target.id==="scUse"){ wrap.remove(); adoptCloudState(d); toast(`Cloud data loaded — this device is now in sync (${n} clients)`); return; }
+    if (ev.target.id==="scPush"){ wrap.remove();
+      appConfirm(`Really replace the cloud backup (${n} clients, ${when}) with this device's ${localN} client${localN===1?"":"s"}? Your other device would then be out of date.`, ()=>{
+        delete S.syncPending; save(); syncExLib(); autoBackup(true);
+      }, {yes:"Overwrite cloud", danger:true}); return; }
+  });
 }
 
 function fetchPending(){
@@ -3443,6 +3498,7 @@ function fetchPending(){
 }
 
 function syncExLib(){
+  if (S.syncPending) return;
   if (!S.syncUrl || !S.syncKey) return;
   fetch(`${S.syncUrl.replace(/\/+$/,"")}/exlib?key=${encodeURIComponent(S.syncKey)}`, {
     method:"POST", headers:{"Content-Type":"application/json"},
