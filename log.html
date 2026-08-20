@@ -566,7 +566,12 @@ const crescent = `<svg class="crescent" viewBox="0 0 100 100"><defs><linearGradi
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const todayISO = () => { const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
 let submitted = false;
-let tab = "log";       /* log | progress */
+let tab = "log";       /* workout | log | progress */
+let _autoTab = false;  /* jump to workout once when a program arrives */
+let progDay = null;    /* selected day index */
+let progExpanded = {}; /* exercise how-to open */
+let progSkip = {};     /* skipped exercises this session */
+let progSent = false;
 let me = null;         /* /me payload */
 let meErr = null;
 let recSent = false;
@@ -710,6 +715,96 @@ function painSpark(cis){
     return (j?`<line x1="${5+100*(j-1)/(pts.length-1)}" y1="${21-17*pts[j-1]/10}" x2="${x}" y2="${y}" stroke="#ba68c8" stroke-width="1.5"/>`:"") + `<circle cx="${x}" cy="${y}" r="1.8" fill="#e3c8ec"/>`;
   }).join("")}</svg>`;
 }
+/* ---- assigned program workout flow ---- */
+function actsGet(){ try { return JSON.parse(localStorage.getItem("dwil-prog-acts")||"{}"); } catch(e){ return {}; } }
+function actsSave(a){ try { localStorage.setItem("dwil-prog-acts", JSON.stringify(a)); } catch(e){} }
+function suggestedDay(p){
+  const last = parseInt(localStorage.getItem("dwil-prog-last-day")||"-1",10);
+  return ((isNaN(last)?-1:last)+1) % p.days.length;
+}
+const EFFORTS = [["warmup","easy"],["moderate","solid"],["heavy","hard"],["max","max effort"]];
+function workoutView(){
+  if (meErr) return `<div class="card"><h1>Workout unavailable</h1><div class="sub">${esc(meErr)}</div></div>`;
+  if (!me) return `<div class="card"><div class="sub">Loading your program…</div></div>`;
+  const p = me.program;
+  if (!p || !p.days || !p.days.length) return `<div class="card"><h1>No program assigned yet</h1><div class="sub">Your coach hasn't set one up — use the Log tab to send workouts in the meantime.</div></div>`;
+  if (progSent) return `<div class="card done" style="padding:22px"><div style="font-size:26px">✓</div><h1 style="margin-top:8px">Workout sent</h1><div class="sub">Your coach will review it. Great work today.</div>
+    <button class="btn" id="woAgain" style="margin-top:12px">Log another workout</button></div>`;
+  const sug = suggestedDay(p);
+  if (progDay == null) progDay = sug;
+  const day = p.days[progDay] || p.days[0];
+  const acts = actsGet();
+  const dayChips = p.days.map((d,i)=>`<button style="flex:1;padding:8px 4px;border-radius:10px;font-size:12px;position:relative;${i===progDay?"background:var(--steel);color:#fff;border:1px solid var(--steel)":"background:var(--panel);color:var(--muted);border:1px solid var(--line)"}" data-pd="${i}">${esc(d.label.split("—")[0].trim())}${i===sug?`<div style="font-size:9px;color:${i===progDay?"#cfe0f2":"var(--steel)"}">up next</div>`:""}</button>`).join("");
+  const cards = day.items.map((it,ii)=>{
+    const skipped = !!progSkip[ii];
+    const prev = acts[it.name] || null;
+    const nSets = it.sets || 3;
+    const tline = `${it.sets} sets × ${esc(it.reps)}${it.tw?` · goal ${it.tw} lbs`:""}${it.ti?` · ${it.ti} effort`:""}${it.rest?` · rest ${esc(it.rest)}`:""}${it.perSide?" · each side":""}`;
+    const rows = skipped ? "" : Array.from({length:nSets},(_,si)=>{
+      const pw = prev && prev[si] ? prev[si].w : (it.tw||"");
+      const pr = prev && prev[si] ? prev[si].r : "";
+      return `<div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+        <span style="color:var(--dim);font-size:11px;width:34px">set ${si+1}</span>
+        <input type="number" inputmode="decimal" id="w-${ii}-${si}" value="${pw}" placeholder="lbs" style="width:80px;margin:0">
+        <span style="color:var(--dim)">×</span>
+        <input type="number" inputmode="numeric" id="r-${ii}-${si}" value="${pr}" placeholder="reps" style="width:74px;margin:0"></div>`;
+    }).join("");
+    const howto = (it.cues && it.cues.length) ? `<div style="margin-top:8px">
+      <button style="background:none;border:none;color:var(--steel);font-size:12px;padding:0;cursor:pointer" data-how="${ii}">${progExpanded[ii]?"▾ Hide":"▸ How to do it"}</button>
+      ${progExpanded[ii]?`<ol style="margin:6px 0 0;padding-left:18px;font-size:12px;color:var(--muted);line-height:1.6">${it.cues.map(cu=>`<li>${esc(cu)}</li>`).join("")}</ol>
+        ${it.mistakes&&it.mistakes.length?`<div style="font-size:11px;color:#e0c48a;margin-top:6px;font-weight:700">Watch out for:</div><ul style="margin:2px 0 0;padding-left:18px;font-size:11px;color:var(--muted);line-height:1.6">${it.mistakes.map(mm=>`<li>${esc(mm)}</li>`).join("")}</ul>`:""}`:""}
+    </div>` : "";
+    const effSeg = skipped ? "" : `<div style="display:flex;gap:6px;margin-top:8px">${EFFORTS.map(([k,l])=>`<button data-eff="${ii}:${k}" style="flex:1;padding:6px 2px;border-radius:9px;font-size:11px;${(progEff[ii]||it.ti||"moderate")===k?"background:var(--steel);color:#fff;border:1px solid var(--steel)":"background:var(--panel2);color:var(--muted);border:1px solid var(--line)"}">${l}</button>`).join("")}</div>`;
+    return `<div class="card" style="${skipped?"opacity:.55":""}">
+      <div style="display:flex;align-items:baseline;gap:8px"><h1 style="font-size:15px;margin:0" class="grow">${esc(it.name)}</h1>
+        <button style="background:none;border:none;color:${skipped?"var(--steel)":"var(--dim)"};font-size:11px;cursor:pointer" data-skip="${ii}">${skipped?"un-skip":"skip"}</button></div>
+      <div class="sub" style="margin-top:2px">${tline}</div>
+      ${it.note?`<div style="font-size:11px;color:var(--dim)">${esc(it.note)}</div>`:""}
+      ${rows}${effSeg}${howto}
+    </div>`;
+  }).join("");
+  return `<div style="display:flex;gap:6px;margin-bottom:10px">${dayChips}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="font-size:13px;font-weight:700;color:var(--ice)">${esc(day.label)}</div>
+      <a href="${worker}/program?c=${encodeURIComponent(client)}&t=${encodeURIComponent(token)}" target="_blank" style="font-size:12px;color:var(--steel);text-decoration:none">Full program ↗</a></div>
+    ${cards}
+    <div class="card"><label>Date</label><input type="date" id="woDate" value="${todayISO()}">
+      <button class="btn" id="woSend" style="margin-top:10px">Send workout to coach</button>
+      <div class="muted" style="margin-top:8px">Weights are pre-filled from last time — just fix what changed. Did something outside the plan (pickup game, buddy workout)? Log it in the <b>Log</b> tab so your recovery stays accurate.</div></div>`;
+}
+let progEff = {}; /* per-exercise effort override */
+function sendWorkout(){
+  const p = me && me.program; if (!p) return;
+  const day = p.days[progDay] || p.days[0];
+  const items = []; const acts = actsGet(); const lines = [];
+  day.items.forEach((it,ii)=>{
+    if (progSkip[ii]){ items.push({ name: it.name, skipped: true }); lines.push(it.name + " — skipped"); return; }
+    const sd = []; const rem = [];
+    for (let si=0; si<(it.sets||3); si++){
+      const w = parseFloat((app.querySelector("#w-"+ii+"-"+si)||{}).value);
+      const r = (app.querySelector("#r-"+ii+"-"+si)||{}).value.trim();
+      if (r) { sd.push({ weight: isNaN(w)?null:w, reps: r }); rem.push({ w: isNaN(w)?"":w, r }); }
+    }
+    if (!sd.length){ items.push({ name: it.name, skipped: true }); lines.push(it.name + " — skipped"); return; }
+    const eff = progEff[ii] || it.ti || "moderate";
+    const wts = sd.map(x=>x.weight).filter(x=>x!=null);
+    items.push({ name: it.name, sets: sd.length, reps: sd.map(x=>x.reps).join("/"),
+      weight: wts.length?Math.max(...wts):null, intensity: eff, setDetail: sd, ...(wts.length?{}:{bw:true}) });
+    lines.push(`${it.name} ${sd.map(x=>`${x.weight!=null?x.weight+"×":""}${x.reps}`).join(", ")} (${eff})`);
+    acts[it.name] = rem;
+  });
+  if (!items.some(it=>!it.skipped)){ alert("Enter at least one exercise (or use the Log tab)"); return; }
+  const btn = app.querySelector("#woSend"); btn.disabled = true; btn.textContent = "Sending…";
+  const date = (app.querySelector("#woDate")||{}).value || todayISO();
+  fetch(`${worker}/submit?c=${encodeURIComponent(client)}&t=${encodeURIComponent(token)}`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ kind:"program", date, title: day.label, text: lines.join("; "), items })
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok){ progSent = true; actsSave(acts); localStorage.setItem("dwil-prog-last-day", String(progDay)); render(); }
+    else { btn.disabled=false; btn.textContent="Send workout to coach"; alert("Could not send: "+(d.error||"try again")); }
+  }).catch(()=>{ btn.disabled=false; btn.textContent="Send workout to coach"; alert("Network error — check your connection and retry."); });
+}
+
 function progressView(){
   if (meErr) return `<div class="card"><h1>Progress unavailable</h1><div class="sub">${esc(meErr)}</div></div>`;
   if (!me) return `<div class="card"><div class="sub">Loading your progress…</div></div>`;
@@ -756,13 +851,31 @@ function render(){
     return;
   }
   const t = (app.querySelector("#t")||{}).value || "";
+  const hasProg = me && me.program && me.program.days && me.program.days.length;
+  const tabBtn = (k, label, id) => `<button style="flex:1;padding:10px 4px;border-radius:11px;font-size:13px;${tab===k?"background:var(--steel);color:#fff":"background:var(--panel);color:var(--muted);border:1px solid var(--line)"}" id="${id}">${label}</button>`;
   const tabs = `<div style="display:flex;gap:8px;margin-bottom:12px">
-    <button style="flex:1;padding:10px;border-radius:11px;font-size:14px;${tab==="log"?"background:var(--steel);color:#fff":"background:var(--panel);color:var(--muted);border:1px solid var(--line)"}" id="tabLog">Log</button>
-    <button style="flex:1;padding:10px;border-radius:11px;font-size:14px;${tab==="progress"?"background:var(--steel);color:#fff":"background:var(--panel);color:var(--muted);border:1px solid var(--line)"}" id="tabProg">My progress</button></div>`;
-  if (tab === "progress"){
-    app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}${progressView()}`;
+    ${hasProg?tabBtn("workout","My workout","tabWo"):""}
+    ${tabBtn("log","Log","tabLog")}
+    ${tabBtn("progress","My progress","tabProg")}</div>`;
+  const wireTabs = () => {
+    const w = app.querySelector("#tabWo"); if (w) w.addEventListener("click", ()=>{ tab="workout"; render(); });
     app.querySelector("#tabLog").addEventListener("click", ()=>{ tab="log"; render(); });
     app.querySelector("#tabProg").addEventListener("click", ()=>{ tab="progress"; render(); });
+  };
+  if (tab === "workout"){
+    app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}${workoutView()}`;
+    wireTabs();
+    app.querySelectorAll("[data-pd]").forEach(b=>b.addEventListener("click", ()=>{ progDay = +b.dataset.pd; progSkip = {}; progEff = {}; render(); }));
+    app.querySelectorAll("[data-how]").forEach(b=>b.addEventListener("click", ()=>{ const k=+b.dataset.how; progExpanded[k]=!progExpanded[k]; render(); }));
+    app.querySelectorAll("[data-skip]").forEach(b=>b.addEventListener("click", ()=>{ const k=+b.dataset.skip; progSkip[k]=!progSkip[k]; if(!progSkip[k])delete progSkip[k]; render(); }));
+    app.querySelectorAll("[data-eff]").forEach(b=>b.addEventListener("click", ()=>{ const [k,v]=b.dataset.eff.split(":"); progEff[+k]=v; render(); }));
+    const ws = app.querySelector("#woSend"); if (ws) ws.addEventListener("click", sendWorkout);
+    const wa = app.querySelector("#woAgain"); if (wa) wa.addEventListener("click", ()=>{ progSent=false; progSkip={}; progEff={}; progDay=null; render(); });
+    return;
+  }
+  if (tab === "progress"){
+    app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}${progressView()}`;
+    wireTabs();
     return;
   }
   app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}
@@ -780,8 +893,7 @@ function render(){
     ${photoCard()}
     ${painCard()}
     ${moveCard()}`;
-  app.querySelector("#tabLog").addEventListener("click", ()=>{ tab="log"; render(); });
-  app.querySelector("#tabProg").addEventListener("click", ()=>{ tab="progress"; render(); });
+  wireTabs();
   const ta = app.querySelector("#t");
   const pv = app.querySelector("#prev");
   pv.innerHTML = preview(t);
@@ -863,7 +975,8 @@ if (worker){
   if (client && token){
     fetch(`${worker}/me?c=${encodeURIComponent(client)}&t=${encodeURIComponent(token)}`)
       .then(r=>r.json()).then(d=>{
-        if (d && d.me){ me = d.me; }
+        if (d && d.me){ me = d.me;
+          if (!_autoTab && me.program && me.program.days && me.program.days.length && tab === "log" && !(app.querySelector("#t")||{}).value){ _autoTab = true; tab = "workout"; render(); } }
         else if (d && d.error === "bad token"){ meErr = "This link is out of date — text your coach for a fresh one."; }
         if (tab === "progress") render();
       }).catch(()=>{ meErr = "Couldn't reach the server — check your connection."; if (tab === "progress") render(); });

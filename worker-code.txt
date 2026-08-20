@@ -194,12 +194,16 @@ export default {
         if (!text) return cors(env, JSON.stringify({ error: "empty" }), 400);
         const rec = {
           client: clientId,
-          kind: ["recovery","photo","paincheck"].includes(body.kind) ? body.kind : "session",
+          kind: ["recovery","photo","paincheck","program"].includes(body.kind) ? body.kind : "session",
           date: String(body.date || "").slice(0, 10),
           title: String(body.title || "").slice(0, 80),
           text,
           submitted: new Date().toISOString(),
         };
+        if (rec.kind === "program" && Array.isArray(body.items)){
+          const js = JSON.stringify(body.items);
+          if (js.length <= 12000) rec.items = body.items;
+        }
         const key = "sub:" + clientId + ":" + Date.now() + ":" + crypto.randomUUID().slice(0, 8);
         await env.TOKENS.put(key, JSON.stringify(rec), { expirationTtl: 60 * 86400 });
         return cors(env, JSON.stringify({ ok: true }));
@@ -274,6 +278,7 @@ export default {
           prs: c.prs || [],
           photoLog: c.photoLog || [],
           pay: c.pay && c.pay.type === "pack" ? { type: "pack", size: c.pay.size, used: null } : null,
+          program: c.program || null,
           recovery: (c.recovery || []).slice(-30),
           injuries: (c.injuries || []).filter(i => i.status !== "cleared").map(i => ({
             label: i.label, chronic: !!i.chronic, onset: i.onset, side: i.side || null,
@@ -299,6 +304,29 @@ export default {
         if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
         const v = await env.TOKENS.get("assess");
         return cors(env, v || "[]");
+      }
+
+      /* ---- assigned program: full rich HTML per client ---- */
+      if (url.pathname === "/program" && request.method === "POST") {
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        const c = url.searchParams.get("c");
+        if (!c) return cors(env, JSON.stringify({ error: "missing c" }), 400);
+        const html = await request.text();
+        if (!html || html.length < 100) return cors(env, JSON.stringify({ error: "empty" }), 400);
+        if (html.length > 20 * 1024 * 1024) return cors(env, JSON.stringify({ error: "too large" }), 413);
+        await env.TOKENS.put("prog:" + c, html);
+        return cors(env, JSON.stringify({ ok: true, bytes: html.length }));
+      }
+      if (url.pathname === "/program") {
+        const c = url.searchParams.get("c");
+        if (!c) return cors(env, "missing c", 400, "text/plain");
+        const isTrainer = env.APP_KEY && url.searchParams.get("key") === env.APP_KEY;
+        if (!isTrainer) {
+          const okc = await clientByToken(env, c, url.searchParams.get("t"));
+          if (!okc) return cors(env, "bad token", 403, "text/plain");
+        }
+        const html = await env.TOKENS.get("prog:" + c);
+        return html ? cors(env, html, 200, "text/html") : cors(env, "No program uploaded yet.", 404, "text/plain");
       }
 
       /* ---- movement-quality videos (R2) ---- */

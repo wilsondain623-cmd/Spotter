@@ -1120,6 +1120,31 @@ function reviewView(){
           <button class="btn2 grow" style="color:#e0a8a8" data-subreject="${i}">Reject</button>
         </div></div>`;
     }
+    if (s.kind === "program" && Array.isArray(s.items)){
+      const prog = c && c.program;
+      const tmap = {};
+      if (prog) for (const d of prog.days) for (const it of d.items) tmap[E.normalize(it.name)] = it;
+      const rows = s.items.map(it=>{
+        const t2 = tmap[E.normalize(it.name)];
+        const tgt = t2 ? `${t2.sets}×${t2.reps}${t2.tw?` @ ${t2.tw}`:""}` : "—";
+        const did = it.skipped ? `<span style="color:#e0a8a8">skipped</span>`
+          : it.setDetail ? it.setDetail.map(sd=>`${sd.weight!=null?sd.weight+"×":""}${sd.reps||"?"}`).join(", ")
+          : `${it.sets}×${it.reps||"?"}${it.weight?` @ ${it.weight}`:""}`;
+        const hit = !it.skipped && t2 && t2.tw && ((it.weight||0) >= t2.tw || (it.setDetail||[]).some(sd=>(sd.weight||0) >= t2.tw));
+        return `<div style="font-size:12px;padding:5px 0;border-bottom:1px solid var(--line)">
+          <b>${esc(it.name)}</b>${hit?" <span style=\"color:#7dc98f\">✓ target</span>":""}
+          <div style="color:var(--dim);font-size:11px">target ${esc(tgt)} → did ${did}${it.note?` · ${esc(it.note)}`:""}</div></div>`;
+      }).join("");
+      return `<div class="card">
+        <div class="row"><div class="grow"><div class="cname">📋 ${esc(name)} — program workout</div>
+        <div class="csub">${fmtDate(s.date)} · ${esc(s.title||"")}</div></div></div>
+        <div style="margin-top:8px">${rows}</div>
+        <div class="row" style="gap:8px;margin-top:10px">
+          ${c?`<button class="btn2 grow" data-subapprove="${i}">✓ Approve → log it</button>`:""}
+          <button class="btn2 grow" style="color:#e0a8a8" data-subreject="${i}">Reject</button>
+        </div>
+        <div class="muted" style="margin-top:6px;font-size:10px">Approving runs the completed exercises through the full model. Skipped ones are ignored.</div></div>`;
+    }
     if (s.kind === "video"){
       return `<div class="card">
         <div class="row"><div class="grow"><div class="cname">🎥 ${esc(name)} — movement check</div>
@@ -3021,6 +3046,122 @@ function payMenu(c){
   });
 }
 
+/* ============ assigned programs ============ */
+/* Parse a program: embedded JSON block first, then the builder-agent template DOM. */
+function parseProgram(html){
+  const jm = html.match(/<script[^>]*id=["']spotter-program["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (jm){ try { const p = JSON.parse(jm[1]); if (p && Array.isArray(p.days)) return p; } catch(e){} }
+  /* template fallback: sections with day-tag + table.sets rows, ex-blocks with cues/mistakes */
+  const days = [];
+  const secs = html.split(/<section[\s>]/i).slice(1);
+  for (const sec of secs){
+    if (!/class=["']sets["']/.test(sec)) continue;
+    const tag = (sec.match(/class=["']day-tag["'][^>]*>([^<]+)</i) || [])[1] || `Day ${days.length+1}`;
+    const h2 = (sec.match(/<h2[^>]*>([^<]+)</i) || [])[1] || "";
+    const items = [];
+    const rows = sec.match(/<tr><td class=["']ex["'][\s\S]*?<\/tr>/gi) || [];
+    for (const row of rows){
+      const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map(m2=>m2[1]);
+      if (cells.length < 3) continue;
+      const cue = (cells[0].match(/<span class=["']cue["'][^>]*>([^<]*)</i) || [])[1] || "";
+      const name = cells[0].replace(/<[^>]+>[\s\S]*$/,"").replace(/<[^>]+>/g,"").trim();
+      items.push({ name, sets: parseInt(cells[1].replace(/<[^>]+>/g,""),10)||3,
+        reps: cells[2].replace(/<[^>]+>/g,"").trim(), rest: (cells[3]||"").replace(/<[^>]+>/g,"").trim(),
+        ...( /per side/i.test(cue) ? { perSide:true } : {}), ...(cue && !/per side/i.test(cue) ? { note: cue.trim() } : {}) });
+    }
+    if (items.length) days.push({ label: `${tag.trim()}${h2?" — "+h2.trim():""}`, items });
+  }
+  /* attach cues + mistakes from ex-blocks by name match */
+  const blocks = html.match(/class=["']ex-block["'][\s\S]*?(?=class=["']ex-block["']|<\/div>\s*<\/section>)/gi) || [];
+  const info = {};
+  for (const b of blocks){
+    const n = (b.match(/<h3[^>]*>([^<]+)</i) || [])[1];
+    if (!n) continue;
+    const ol = (b.match(/<ol>([\s\S]*?)<\/ol>/i) || [])[1] || "";
+    const ul = (b.match(/<ul>([\s\S]*?)<\/ul>/i) || [])[1] || "";
+    const lis = s => [...s.matchAll(/<li>([\s\S]*?)<\/li>/gi)].map(m2=>m2[1].replace(/<[^>]+>/g,"").trim());
+    info[E.normalize(n.trim())] = { cues: lis(ol), mistakes: lis(ul) };
+  }
+  for (const d of days) for (const it of d.items){
+    const inf = info[E.normalize(it.name)];
+    if (inf){ if (inf.cues.length) it.cues = inf.cues; if (inf.mistakes.length) it.mistakes = inf.mistakes; }
+  }
+  const name = (html.match(/<title>([^<]+)</i) || [])[1] || "Program";
+  return days.length ? { name: name.trim(), days } : null;
+}
+function uploadProgramHtml(c, html){
+  if (!S.syncUrl || !S.syncKey) return Promise.resolve(false);
+  return fetch(`${S.syncUrl.replace(/\/+$/,"")}/program?c=${encodeURIComponent(c.id)}&key=${encodeURIComponent(S.syncKey)}`,
+    { method:"POST", headers:{ "Content-Type":"text/html" }, body: html })
+    .then(r=>r.json()).then(d=>!!d.ok).catch(()=>false);
+}
+function programMenu(c){
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  const cur = c.program;
+  wrap.innerHTML = `<div class="modal" style="max-height:86vh;overflow-y:auto"><h2 style="margin-top:0">${esc(c.name)} — program</h2>
+    ${cur?`<div style="background:var(--panel2);border-radius:10px;padding:10px 12px;font-size:12px;margin-bottom:10px">
+      <b style="color:var(--ice)">${esc(cur.name||"Program")}</b> · ${cur.days.length} day${cur.days.length>1?"s":""} · assigned ${fmtDate(cur.assigned||todayISO())}
+      <div style="color:var(--dim);margin-top:2px">${cur.days.map(d=>`${esc(d.label)}: ${d.items.length} exercises`).join(" · ")}</div></div>
+      <button class="btn2" style="width:100%;margin-bottom:8px" id="pgTargets">Edit target weights / intensity…</button>
+      <button class="btn2" style="width:100%;margin-bottom:8px;color:#e0a8a8" id="pgRemove">Remove program</button>
+      <div style="border-top:1px solid var(--line);margin:10px 0"></div>`:""}
+    <div style="font-size:12px;color:#CFD3DC">Paste the full program HTML from your program builder (the whole file — pictures included):</div>
+    <textarea id="pgPaste" style="width:100%;min-height:90px;margin-top:6px;font-size:11px" placeholder="Open the program file → select all → copy → paste here"></textarea>
+    <button class="btn" style="width:100%;margin-top:8px" id="pgImport">Import program</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="pgClose">Close</button>
+    <div class="muted" style="font-size:10px;margin-top:6px">Clients see it as a guided "Workout" tab on their link — targets, your how-to steps, common mistakes, and the full illustrated program.</div></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", ev=>{
+    if (ev.target===wrap || ev.target.id==="pgClose"){ wrap.remove(); return; }
+    if (ev.target.id==="pgRemove"){ wrap.remove(); appConfirm(`Remove ${c.name}'s program? Their link goes back to freeform logging.`, ()=>{ delete c.program; save(); autoBackup(true); render(); toast("Program removed"); }, {yes:"Remove", danger:true}); return; }
+    if (ev.target.id==="pgTargets"){ wrap.remove(); programTargets(c); return; }
+    if (ev.target.id==="pgImport"){
+      const html = wrap.querySelector("#pgPaste").value;
+      if (!html.trim()){ toast("Paste the program HTML first"); return; }
+      const p = parseProgram(html);
+      if (!p){ toast("Couldn't read that — paste the whole HTML file from the builder"); return; }
+      p.assigned = todayISO();
+      const unmatched = [];
+      for (const d of p.days) for (const it of d.items){ if (!E.matchExercise(it.name, S.customExercises)) unmatched.push(it.name); }
+      c.program = p; save(); autoBackup(true);
+      const btn = wrap.querySelector("#pgImport"); btn.textContent = "Uploading full program…"; btn.disabled = true;
+      uploadProgramHtml(c, html).then(ok=>{
+        wrap.remove(); render();
+        toast(`Program assigned — ${p.days.length} day${p.days.length>1?"s":""}${ok?", illustrated version uploaded":""}${unmatched.length?`. Unknown exercises (assign muscles on first approve): ${unmatched.join(", ")}`:""}`);
+        programTargets(c);
+      });
+    }
+  });
+}
+function programTargets(c){
+  const p = c.program; if (!p) return;
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  const rows = p.days.map((d,di)=>`<div style="font-size:12px;font-weight:800;color:var(--ice);margin-top:${di?10:0}px">${esc(d.label)}</div>`
+    + d.items.map((it,ii)=>`<div class="minirow" style="align-items:center">
+      <div class="grow" style="min-width:0;font-size:12px">${esc(it.name)} <span style="color:var(--dim);font-size:11px">${it.sets}×${esc(it.reps)}</span></div>
+      <input type="number" inputmode="decimal" style="width:64px" value="${it.tw??""}" placeholder="lbs" data-ptw="${di}:${ii}">
+      <select data-pti="${di}:${ii}" style="width:96px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px;padding:6px 4px">
+        ${["","warmup","moderate","heavy","max"].map(k=>`<option value="${k}" ${((it.ti||"")===k)?"selected":""}>${k||"— effort —"}</option>`).join("")}
+      </select></div>`).join("")).join("");
+  wrap.innerHTML = `<div class="modal" style="max-height:86vh;overflow-y:auto"><h2 style="margin-top:0">Targets — ${esc(c.name)}</h2>
+    <div class="muted" style="font-size:11px;margin-bottom:8px">Optional per exercise. Weight targets show on the client's card when set; leave blank when you don't know their numbers yet.</div>
+    ${rows}
+    <button class="btn" style="width:100%;margin-top:12px" id="ptSave">Save targets</button></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", ev=>{
+    if (ev.target===wrap){ wrap.remove(); return; }
+    if (ev.target.id==="ptSave"){
+      wrap.querySelectorAll("[data-ptw]").forEach(inp=>{ const [di,ii]=inp.dataset.ptw.split(":").map(Number);
+        const v = parseFloat(inp.value); if (v) p.days[di].items[ii].tw = v; else delete p.days[di].items[ii].tw; });
+      wrap.querySelectorAll("[data-pti]").forEach(sel=>{ const [di,ii]=sel.dataset.pti.split(":").map(Number);
+        if (sel.value) p.days[di].items[ii].ti = sel.value; else delete p.days[di].items[ii].ti; });
+      save(); autoBackup(true); wrap.remove(); toast("Targets saved — clients see them next time they open their link");
+    }
+  });
+}
+
 function clientMenu(){
   const c = client(); if (!c) return;
   const wrap = document.createElement("div");
@@ -3029,6 +3170,7 @@ function clientMenu(){
     <h2 style="margin-top:0">${esc(c.name)}</h2>
     <button class="btn2" style="width:100%" id="cmProfile">Edit profile / goals / injuries</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmPhoto">📸 Log progress photos today</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="cmProgram">📋 Program…${c.program?` <span style="color:#7dc98f;font-size:11px">(${c.program.days.length}-day assigned)</span>`:""}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmPay">Payment & sessions…</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmTrain">Training history${c.trainStart?` (since ${esc(c.trainStart)})`:"…"}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmRename">Rename client</button>
@@ -3045,6 +3187,7 @@ function clientMenu(){
         const t = v.trim(); if (!t){ delete c.trainStart; } else if (/^\d{4}(-\d{2}(-\d{2})?)?$/.test(t)){ c.trainStart = t; } else { toast("Use a year like 2015"); return; }
         save(); render(); toast(t?`Training age set — fatigue model now expects a ${Math.round(trainingYears(c))}-year-adapted system`:"Training age cleared"); }); }
     if (ev.target.id==="cmPhoto"){ c.photoLog=c.photoLog||[]; if (!c.photoLog.includes(todayISO())){ c.photoLog.push(todayISO()); c.photoLog.sort(); save(); render(); toast("Progress photos logged for today"); } else toast("Already logged today"); wrap.remove(); }
+    if (ev.target.id==="cmProgram"){ wrap.remove(); programMenu(c); }
     if (ev.target.id==="cmPay"){ wrap.remove(); payMenu(c); }
     if (ev.target.id==="cmRename"){ wrap.remove(); appPrompt("New name:", c.name, n=>{ if (n.trim()){ c.name=n.trim(); save(); render(); } }); }
     if (ev.target.id==="cmLogLink"){ const l = clientLogLink(c); if (l){ if (navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Solo-log link copied — text it to "+c.name)).catch(()=>appCopy("Send this to "+c.name+":", l)); else appCopy("Send this to "+c.name+":", l); } wrap.remove(); }
@@ -3154,6 +3297,21 @@ function approveSub(idx){
     const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
     ackSub(sid); render(); toast(`Check-in attached to ${inj.label}`);
     }
+  }
+  if (s.kind === "program" && Array.isArray(s.items)){
+    const items = s.items.filter(it=>!it.skipped).map(it=>{
+      const m2 = exMuscles(it.name);
+      const ex = E.matchExercise(it.name, S.customExercises);
+      return { name: ex ? ex.name : it.name, sets: it.sets||1, reps: it.reps||"", weight: it.weight??null,
+        intensity: it.intensity||"moderate", ...(it.setDetail?{setDetail:it.setDetail}:{}),
+        ...(it.bw?{bw:true}:{}), primary: m2.p, secondary: m2.s, sys: m2.sys, ...(ex?{}:{unmatchedName:true}) };
+    }).filter(it=>it.primary.length || it.secondary.length);
+    if (!items.length){ toast("Nothing recognizable to log — check exercise names"); return; }
+    const befP = curSnap(c), sysBP = curSys(c);
+    const prMsg = applyParsedSession(c, items, s.date, s.title||"Program workout", true);
+    const sum = buildSummary(c, items, s.date, s.title||"Program workout", applyParsedSession.prs||[], befP, curSnap(c), sysBP, curSys(c));
+    const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
+    ackSub(sid); render(); summaryModal([sum]); return;
   }
   if (s.kind === "video"){
     const m = /^(.*?)(?:\s*\((L|R)\))?$/.exec(s.title || "movement");
