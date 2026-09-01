@@ -750,12 +750,31 @@ function missCard(s){
     <button class="btn" id="mrSend" style="margin-top:8px">Send</button>
   </div>`;
 }
+function weekStartOf(dISO){
+  const d = new Date(dISO + "T00:00:00");
+  const dow = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - dow);
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
 function schedCard(){
   if (!me || !me.sched) return "";
   const today = todayISO();
   const up = (me.sched.slots||[]).filter(s=>s.status==="open" && s.d>=today).slice(0,5);
+  const goal = me.weeklyGoal;
+  let counter = "";
+  if (goal){
+    const thisWk = weekStartOf(today);
+    const nextWk = weekStartOf((()=>{ const d=new Date(today+"T00:00:00"); d.setDate(d.getDate()+7); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); })());
+    const cnt = wk => (me.sched.slots||[]).filter(s=>s.status!=="canceled" && weekStartOf(s.d)===wk).length;
+    const cT = cnt(thisWk), cN = cnt(nextWk);
+    const hitT = cT >= goal, hitN = cN >= goal;
+    counter = `<div style="display:flex;gap:14px;margin-top:6px;font-size:13px">
+      <span>This week <b style="color:${hitT?"#7dc98f":"#e0c48a"}">${cT}/${goal}${hitT?" ✓":""}</b></span>
+      <span style="color:var(--dim)">Next week <b style="color:${hitN?"#7dc98f":cN?"#e0c48a":"var(--dim)"}">${cN}/${goal}${hitN?" ✓":""}</b></span></div>`;
+  }
   return `<div class="card"><h1 style="font-size:16px">My session schedule</h1>
-    <div class="sub">Booking a time makes it real — you'll hear from your coach if it doesn't happen.</div>
+    ${counter}
+    <div class="sub">${goal?`Your goal is ${goal} sessions a week — book them and they happen.`:"Booking a time makes it real — you'll hear from your coach if it doesn't happen."}</div>
     ${up.length?up.map(s=>`<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:6px 0;border-bottom:1px solid var(--line)">
       <span>${s.d}${s.t?" · "+s.t:""}</span>
       ${s.d>today?`<button data-scx="${s.d}" style="background:none;border:none;color:var(--dim);font-size:12px;cursor:pointer">cancel</button>`:`<span style="color:var(--ice);font-size:11px">today</span>`}</div>`).join("")

@@ -154,8 +154,45 @@ async function sendMissEmail(env, to, name, slot, strikes, link){
     return r.ok;
   } catch { return false; }
 }
-async function runMissCheck(env){
-  const today = etToday();
+function weekStartOf(dISO){
+  const d = new Date(dISO + "T00:00:00Z");
+  const dow = (d.getUTCDay() + 6) % 7; /* 0 = Monday */
+  d.setUTCDate(d.getUTCDate() - dow);
+  return d.toISOString().slice(0, 10);
+}
+function weeklyEmail(name, info, link){
+  const first = (name || "there").split(" ")[0];
+  const planLine = info.booked < info.goal
+    ? `<p>This week you've booked ${info.booked} of ${info.goal} sessions so far — <a href="${link}">take 60 seconds and lock in the rest now</a>. Booked sessions happen; unbooked ones don't.</p>`
+    : `<p>This week is fully booked (${info.booked}/${info.goal}) — good. Now show up for them.</p>`;
+  if (!info.shortLast) return { subject: `Set your training week up, ${first}`,
+    html: `<p>Hey ${first},</p>${planLine}<p>— Dain · Dwil Fitness</p>` };
+  if (info.streak <= 1) return { subject: `Last week: ${info.did} of ${info.goal} — clean slate`,
+    html: `<p>Hey ${first},</p><p>Last week ended at ${info.did} of ${info.goal} sessions. No guilt — every week starts at zero either way.</p>${planLine}<p>— Dain · Dwil Fitness</p>` };
+  if (info.streak === 2) return { subject: `Two short weeks, ${first} — time to adjust`,
+    html: `<p>Hey ${first},</p><p>That's two weeks in a row under your ${info.goal}-a-week goal. When the plan misses twice, the plan itself is usually the problem — reply and tell me what's actually realistic right now, or commit to this week properly.</p>${planLine}<p>— Dain</p>` };
+  return { subject: `${first} — ${info.streak} short weeks. Let's talk`,
+    html: `<p>${first},</p><p>${info.streak} weeks running under the goal we set together. I'd rather rebuild the plan with you than watch it quietly slide — reply to this or text me today.</p>${planLine}<p>— Dain</p>` };
+}
+function thursdayEmail(name, booked, goal, link){
+  const first = (name || "there").split(" ")[0];
+  return { subject: `Half the week's gone — ${booked} of ${goal} booked`,
+    html: `<p>Hey ${first},</p><p>Quick heads-up: the week's half over and you've got ${booked} of ${goal} sessions booked. Weekends fill up fast — <a href="${link}">grab your remaining slots now</a> so the goal stays realistic.</p><p>— Dain · Dwil Fitness</p>` };
+}
+async function sendRawEmail(env, to, m){
+  if (!env.RESEND_KEY || !env.FROM_EMAIL || !to) return false;
+  try {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + env.RESEND_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: `Dain — Dwil Fitness <${env.FROM_EMAIL}>`, to: [to],
+        subject: m.subject, html: m.html, ...(env.REPLY_TO ? { reply_to: env.REPLY_TO } : {}) }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+async function runMissCheck(env, todayArg){
+  const today = todayArg || etToday();
   const state = await getState(env);
   if (!state) return { checked: 0, misses: 0, note: "no backup" };
   const pendList = await env.TOKENS.list({ prefix: "sub:" });
@@ -189,6 +226,42 @@ async function runMissCheck(env){
         const ok = await sendMissEmail(env, client.email, client.name, s, rec.strikes, link);
         if (ok){ s.emailed = true; emails++; }
       }
+    }
+    /* ---- weekly session goal: Monday check-in + Thursday nudge ---- */
+    const goal = client && client.weeklyGoal > 0 ? client.weeklyGoal : 0;
+    if (goal){
+      const dow = (new Date(today + "T00:00:00Z").getUTCDay() + 6) % 7; /* 0 = Monday */
+      const thisWk = weekStartOf(today);
+      rec.weeks = rec.weeks || {};
+      const booked = rec.slots.filter(s => s.status !== "canceled" && weekStartOf(s.d) === thisWk).length;
+      const base = (env.ALLOWED_ORIGIN || "") + "/Spotter/log.html";
+      const link = client.token ? `${base}?c=${encodeURIComponent(c)}&t=${encodeURIComponent(client.token)}&w=${encodeURIComponent("https://dwil-sync.wilsondain623.workers.dev")}` : base;
+      const wk = rec.weeks[thisWk] = rec.weeks[thisWk] || {};
+      if (dow === 0 && !wk.monday){
+        wk.monday = true; changed = true;
+        const lastWkStart = weekStartOf(new Date(new Date(today + "T00:00:00Z").getTime() - 7 * 86400000).toISOString().slice(0, 10));
+        const days = new Set();
+        for (const s2 of (client.sessions || [])) if (weekStartOf(s2.date) === lastWkStart) days.add(s2.date);
+        if (pendDates[c]) for (const d2 of pendDates[c]) if (weekStartOf(d2) === lastWkStart) days.add(d2);
+        const did = days.size;
+        const shortLast = did < goal;
+        rec.shortStreak = shortLast ? (rec.shortStreak || 0) + 1 : 0;
+        if (shortLast) await pushSub(env, c, { kind: "weekshort", date: today, title: "Weekly goal missed",
+          text: `Last week: ${did} of ${goal} sessions${rec.shortStreak > 1 ? ` — ${rec.shortStreak} short weeks in a row` : ""}. This week booked so far: ${booked}/${goal}.` });
+        if ((shortLast || booked < goal) && client.email){
+          const ok = await sendRawEmail(env, client.email, weeklyEmail(client.name, { goal, did, shortLast, booked, streak: rec.shortStreak }, link));
+          if (ok) emails++;
+        }
+      } else if (dow === 3 && !wk.thursday && booked < goal){
+        wk.thursday = true; changed = true;
+        if (client.email){
+          const ok = await sendRawEmail(env, client.email, thursdayEmail(client.name, booked, goal, link));
+          if (ok) emails++;
+        }
+      }
+      /* prune old week entries */
+      const wkKeys = Object.keys(rec.weeks);
+      if (wkKeys.length > 12){ wkKeys.sort(); for (const k2 of wkKeys.slice(0, wkKeys.length - 12)) delete rec.weeks[k2]; changed = true; }
     }
     /* prune ancient resolved slots */
     if (rec.slots.length > 60) rec.slots = rec.slots.slice(-60);
@@ -360,6 +433,7 @@ export default {
           pay: c.pay && c.pay.type === "pack" ? { type: "pack", size: c.pay.size, used: null } : null,
           program: c.program || null,
           sched: await schedGet(env, c.id),
+          weeklyGoal: c.weeklyGoal || null,
           recovery: (c.recovery || []).slice(-30),
           injuries: (c.injuries || []).filter(i => i.status !== "cleared").map(i => ({
             label: i.label, chronic: !!i.chronic, onset: i.onset, side: i.side || null,
@@ -429,7 +503,7 @@ export default {
       }
       if (url.pathname === "/misscheck") { /* manual trigger for testing */
         if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
-        const out = await runMissCheck(env);
+        const out = await runMissCheck(env, url.searchParams.get("d") || undefined);
         return cors(env, JSON.stringify(out));
       }
 

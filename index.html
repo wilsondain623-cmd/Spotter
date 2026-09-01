@@ -1011,12 +1011,18 @@ function checkPackRenewal(c){
   }, 450);
 }
 function weekSessions(c, solo){ const cut = new Date(Date.now()-7*86400000); const cutISO = cut.getFullYear()+"-"+String(cut.getMonth()+1).padStart(2,"0")+"-"+String(cut.getDate()).padStart(2,"0"); return c.sessions.filter(s=>(solo?!!s.solo:!s.solo) && s.date>cutISO).length; }
+function goalLine(c){
+  const g = c.weeklyGoal; if (!g) return "";
+  const wk = weekSessions(c) + weekSessions(c, true);
+  const hit = wk >= g;
+  return `<div style="margin-top:6px"><span class="bb">Weekly goal:</span> <span style="color:${hit?"#7dc98f":"#d4a04d"};font-weight:800">${wk}/${g}${hit?" ✓":""}</span> sessions this week</div>`;
+}
 function payBrief(c){
-  const p = c.pay; if (!p || !p.type || p.type==="none") return "";
+  const p = c.pay; if (!p || !p.type || p.type==="none") return goalLine(c);
   if (p.type==="pack"){ const used=packUsed(c), size=p.size||10, left=Math.max(0,size-used);
-    return `<div style="margin-top:6px"><span class="bb">Sessions:</span> ${used} of ${size} used${left<=2?` — <span style="color:${left===0?"#c95f5f":"#d4a04d"};font-weight:800">${left} left, time to renew</span>`:` (${left} left)`}</div>`; }
+    return `<div style="margin-top:6px"><span class="bb">Sessions:</span> ${used} of ${size} used${left<=2?` — <span style="color:${left===0?"#c95f5f":"#d4a04d"};font-weight:800">${left} left, time to renew</span>`:` (${left} left)`}</div>` + goalLine(c); }
   const wk = weekSessions(c), wkSolo = weekSessions(c, true);
-  return `<div style="margin-top:6px"><span class="bb">This week:</span> ${wk} session${wk===1?"":"s"}${wkSolo?` <span style="color:var(--dim)">(+${wkSolo} solo)</span>`:""}${p.weekly?` · target ${p.weekly}/wk`:""}</div>`;
+  return `<div style="margin-top:6px"><span class="bb">This week:</span> ${wk} session${wk===1?"":"s"}${wkSolo?` <span style="color:var(--dim)">(+${wkSolo} solo)</span>`:""}${p.weekly?` · target ${p.weekly}/wk`:""}</div>` + goalLine(c);
 }
 function photoBrief(c){
   const log = c.photoLog||[]; if (!log.length) return "";
@@ -1128,9 +1134,9 @@ function reviewView(){
           <button class="btn2 grow" style="color:#e0a8a8" data-subreject="${i}">Reject</button>
         </div></div>`;
     }
-    if (s.kind === "miss" || s.kind === "missreason"){
+    if (s.kind === "miss" || s.kind === "missreason" || s.kind === "weekshort"){
       return `<div class="card" style="border-color:${s.kind==="miss"?"#c95f5f55":"#d4a04d55"}">
-        <div class="row"><div class="grow"><div class="cname">${s.kind==="miss"?"⚠":"💬"} ${esc(name)} — ${s.kind==="miss"?"missed scheduled session":"gave a reason"}</div>
+        <div class="row"><div class="grow"><div class="cname">${s.kind==="miss"?"⚠":s.kind==="weekshort"?"🎯":"💬"} ${esc(name)} — ${s.kind==="miss"?"missed scheduled session":s.kind==="weekshort"?"under weekly goal":"gave a reason"}</div>
         <div class="csub">${fmtDate(s.date)} · ${esc(s.text)}</div></div></div>
         <div class="row" style="gap:8px;margin-top:10px">
           <button class="btn2 grow" data-subapprove="${i}">Acknowledge</button>
@@ -3253,7 +3259,7 @@ function schedView(c){
       const wrap = document.createElement("div");
       wrap.className = "modal-bg";
       wrap.innerHTML = `<div class="modal" style="max-height:80vh;overflow-y:auto"><h2 style="margin-top:0">${esc(c.name)} — schedule</h2>
-        <div style="font-size:12px;color:#CFD3DC;margin-bottom:8px">${done+missed?`Adherence: <b style="color:${missed>done?"#e0a8a8":"#7dc98f"}">${done}/${done+missed}</b> planned sessions completed`:"No history yet"}${d.strikes?` · current streak of misses: <b style="color:#e0a8a8">${d.strikes}</b>`:""}</div>
+        <div style="font-size:12px;color:#CFD3DC;margin-bottom:8px">${done+missed?`Adherence: <b style="color:${missed>done?"#e0a8a8":"#7dc98f"}">${done}/${done+missed}</b> planned sessions completed`:"No history yet"}${d.strikes?` · missed-session streak: <b style="color:#e0a8a8">${d.strikes}</b>`:""}${d.shortStreak?` · short-week streak: <b style="color:#e0a8a8">${d.shortStreak}</b>`:""}</div>
         ${slots.length?slots.map(s=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid var(--line)"><span>${fmtDate(s.d)}${s.t?" · "+s.t:""}</span>${stat(s)}</div>`).join(""):`<div class="muted">They haven't scheduled anything yet — sessions get booked from their link.</div>`}
         <button class="btn2" style="width:100%;margin-top:10px" id="svClose">Close</button></div>`;
       document.body.appendChild(wrap);
@@ -3269,6 +3275,7 @@ function clientMenu(){
     <button class="btn2" style="width:100%" id="cmProfile">Edit profile / goals / injuries</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmPhoto">📸 Log progress photos today</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmEmail">✉ Email${c.email?`  <span style="color:var(--dim);font-size:11px">${esc(c.email)}</span>`:"…"}</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="cmWkGoal">🎯 Weekly goal${c.weeklyGoal?` <span style="color:var(--dim);font-size:11px">${c.weeklyGoal}/wk</span>`:"…"}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmSched">📅 Scheduled sessions…</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmProgram">📋 Program…${c.program?` <span style="color:#7dc98f;font-size:11px">(${c.program.days.length}-day assigned)</span>`:""}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmPay">Payment & sessions…</button>
@@ -3288,6 +3295,7 @@ function clientMenu(){
         save(); render(); toast(t?`Training age set — fatigue model now expects a ${Math.round(trainingYears(c))}-year-adapted system`:"Training age cleared"); }); }
     if (ev.target.id==="cmPhoto"){ c.photoLog=c.photoLog||[]; if (!c.photoLog.includes(todayISO())){ c.photoLog.push(todayISO()); c.photoLog.sort(); save(); render(); toast("Progress photos logged for today"); } else toast("Already logged today"); wrap.remove(); }
     if (ev.target.id==="cmEmail"){ wrap.remove(); appPrompt("Client email (used for reports and missed-session accountability emails):", c.email||"", v=>{ const e2=v.trim(); if (e2) c.email=e2; else delete c.email; save(); autoBackup(true); render(); toast(e2?"Email saved":"Email cleared"); }); }
+    if (ev.target.id==="cmWkGoal"){ wrap.remove(); appPrompt("Sessions per week goal (blank or 0 = off). Drives their booking counter + Monday/Thursday accountability emails:", c.weeklyGoal||"", v=>{ const n = parseInt(v,10); if (n>0) c.weeklyGoal = n; else delete c.weeklyGoal; save(); autoBackup(true); render(); toast(n>0?`Goal set — ${n} sessions/week`:"Weekly goal off"); }); }
     if (ev.target.id==="cmSched"){ wrap.remove(); schedView(c); }
     if (ev.target.id==="cmProgram"){ wrap.remove(); programMenu(c); }
     if (ev.target.id==="cmPay"){ wrap.remove(); payMenu(c); }
@@ -3400,7 +3408,7 @@ function approveSub(idx){
     ackSub(sid); render(); toast(`Check-in attached to ${inj.label}`);
     }
   }
-  if (s.kind === "miss" || s.kind === "missreason"){
+  if (s.kind === "miss" || s.kind === "missreason" || s.kind === "weekshort"){
     const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
     ackSub(sid); render(); return;
   }
@@ -3659,6 +3667,10 @@ function addClient(){
     <input type="text" id="ncGoals" placeholder="e.g. fat loss, first pull-up, pain-free movement" style="width:100%;margin-top:4px">
     <div style="font-size:12px;color:#CFD3DC;margin-top:10px">Email <span style="color:var(--dim);font-size:10px">(for reports + missed-session accountability)</span></div>
     <input type="email" id="ncEmail" placeholder="client@email.com" style="width:100%;margin-top:4px">
+    <div style="font-size:12px;color:#CFD3DC;margin-top:10px">Sessions per week goal <span style="color:var(--dim);font-size:10px">(drives their booking counter + weekly accountability)</span></div>
+    <div class="row" style="gap:6px;margin-top:5px">
+      ${[0,2,3,4,5].map(n=>`<button class="btn2 grow ncwk" data-w="${n}" style="font-size:12px;${n===0?"border-color:var(--steel)":""}">${n||"none"}</button>`).join("")}
+    </div>
     <div style="font-size:12px;color:#CFD3DC;margin-top:10px">Payment</div>
     <div class="row" style="gap:6px;margin-top:5px">
       ${[["none","None yet"],["pack","Session pack"],["monthly","Monthly"]].map(([k,l],i)=>`<button class="btn2 grow ncpay" data-p="${k}" style="font-size:12px;${i===0?"border-color:var(--steel)":""}">${l}</button>`).join("")}
@@ -3672,11 +3684,13 @@ function addClient(){
       <button class="btn2" id="ncCancel">Cancel</button></div>
     <div class="muted" style="font-size:10px;margin-top:6px">Injuries and chronic issues get logged in their Injuries tab once they exist. Everything here is editable later via ⋯.</div></div>`;
   document.body.appendChild(wrap);
-  let exp = null, payType = "none";
+  let exp = null, payType = "none", wkGoal = 0;
   setTimeout(()=>{ const n = wrap.querySelector("#ncName"); if (n && n.focus) n.focus(); }, 50);
   wrap.addEventListener("click", ev=>{
     const eb = ev.target.closest(".ncexp");
     if (eb){ exp = eb.dataset.e; wrap.querySelectorAll(".ncexp").forEach(b=>b.style.borderColor=""); eb.style.borderColor = "var(--steel)"; return; }
+    const wb = ev.target.closest(".ncwk");
+    if (wb){ wkGoal = +wb.dataset.w; wrap.querySelectorAll(".ncwk").forEach(b=>b.style.borderColor=""); wb.style.borderColor = "var(--steel)"; return; }
     const pb = ev.target.closest(".ncpay");
     if (pb){ payType = pb.dataset.p; wrap.querySelectorAll(".ncpay").forEach(b=>b.style.borderColor=""); pb.style.borderColor = "var(--steel)";
       wrap.querySelector("#ncPackRow").style.display = payType === "pack" ? "flex" : "none"; return; }
@@ -3687,7 +3701,7 @@ function addClient(){
       const id = name.toLowerCase().replace(/\s+/g,"-");
       if (S.clients.some(c=>c.id===id)){ toast("That client already exists"); return; }
       const _em = wrap.querySelector("#ncEmail").value.trim();
-      const c = { id, name, profile: wrap.querySelector("#ncGoals").value.trim(), ...(_em?{email:_em}:{}), snapshot:zeroSnap(), sysFatigue:0, recovery:[], injuries:[], lastUpdated:todayISO(), sessions:[], prs:[], notes:[], nextPlan:"" };
+      const c = { id, name, profile: wrap.querySelector("#ncGoals").value.trim(), ...(_em?{email:_em}:{}), ...(wkGoal?{weeklyGoal:wkGoal}:{}), snapshot:zeroSnap(), sysFatigue:0, recovery:[], injuries:[], lastUpdated:todayISO(), sessions:[], prs:[], notes:[], nextPlan:"" };
       const opt = EXP_OPTS.find(o=>o[0]===exp);
       if (opt){
         if (opt[0] === "never"){ c.novTrust = true; }
