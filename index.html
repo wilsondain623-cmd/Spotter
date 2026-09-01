@@ -2321,6 +2321,98 @@ function chartSvg(pts, exName){
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block">${out}</svg>`;
 }
 
+/* ============ DEXA body composition ============ */
+function addDexa(c, scan){
+  if (!scan || !scan.date || scan.bf == null) return false;
+  c.dexa = (c.dexa || []).filter(s => s.date !== scan.date);
+  c.dexa.push({ date: scan.date, bf: Math.round(scan.bf * 10) / 10,
+    ...(scan.lean != null ? { lean: Math.round(scan.lean * 10) / 10 } : {}),
+    ...(scan.fat != null ? { fat: Math.round(scan.fat * 10) / 10 } : {}),
+    ...(scan.vat != null ? { vat: Math.round(scan.vat * 100) / 100 } : {}) });
+  c.dexa.sort((a, b) => a.date.localeCompare(b.date));
+  return true;
+}
+function dexaDelta(v, prev, invertGood){
+  if (v == null || prev == null) return "";
+  const d = Math.round((v - prev) * 10) / 10;
+  if (d === 0) return ` <span style="color:var(--dim);font-size:11px">±0</span>`;
+  const good = invertGood ? d < 0 : d > 0;
+  return ` <span style="color:${good ? "#7dc98f" : "#e0a86a"};font-size:11px">${d > 0 ? "+" : ""}${d}</span>`;
+}
+function dexaCard(c){
+  const dx = c.dexa || [];
+  if (!dx.length) return "";
+  const last = dx[dx.length - 1], prev = dx.length > 1 ? dx[dx.length - 2] : null;
+  const tile = (label, v, unit, delta) => `<div style="background:var(--panel2);border-radius:8px;padding:8px 4px;text-align:center">
+    <div style="font-size:15px;font-weight:800">${v != null ? v + unit : "—"}${delta || ""}</div>
+    <div style="color:var(--dim);font-size:10px">${label}</div></div>`;
+  const tiles = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+    ${tile("body fat", last.bf, "%", prev ? dexaDelta(last.bf, prev.bf, true) : "")}
+    ${tile("lean mass", last.lean, " lb", prev ? dexaDelta(last.lean, prev.lean, false) : "")}
+    ${tile("fat mass", last.fat, " lb", prev ? dexaDelta(last.fat, prev.fat, true) : "")}
+    ${tile("visceral", last.vat, "", prev ? dexaDelta(last.vat, prev.vat, true) : "")}</div>`;
+  let chart = "";
+  const pts = dx.filter(s => s.lean != null && s.fat != null);
+  if (pts.length >= 3){
+    const W = 520, H = 170, L = 40, R = 12, T = 16, B = 26;
+    const iw = W - L - R, ih = H - T - B;
+    const all = pts.flatMap(p => [p.lean, p.fat]);
+    let lo = Math.min(...all), hi = Math.max(...all);
+    const pad = (hi - lo) * 0.15 || 5; lo = Math.max(0, lo - pad); hi += pad;
+    const X = i => pts.length === 1 ? L + iw/2 : L + iw * i / (pts.length - 1);
+    const Y = v => T + ih - ih * (v - lo) / (hi - lo);
+    const line = (key, col) => pts.map((p, i) => `${i ? "L" : "M"}${X(i)},${Y(p[key])}`).join(" ");
+    let out = "";
+    for (let g = 0; g <= 2; g++){ const v = lo + (hi - lo) * g / 2, y = Y(v);
+      out += `<line x1="${L}" y1="${y}" x2="${W-R}" y2="${y}" stroke="#232c42"/><text x="${L-5}" y="${y+4}" text-anchor="end" fill="#8b93a5" font-size="10">${Math.round(v)}</text>`; }
+    out += `<path d="${line("lean", 1)}" fill="none" stroke="#4D7DB4" stroke-width="2.5"/>`;
+    out += `<path d="${line("fat", 1)}" fill="none" stroke="#e0a86a" stroke-width="2.5"/>`;
+    pts.forEach((p, i) => {
+      out += `<circle cx="${X(i)}" cy="${Y(p.lean)}" r="3.5" fill="#A8C4E0" stroke="#0A0E18"/><circle cx="${X(i)}" cy="${Y(p.fat)}" r="3.5" fill="#e0a86a" stroke="#0A0E18"/>`;
+      out += `<text x="${Math.min(Math.max(X(i), L+16), W-R-16)}" y="${Y(p.fat)+16}" text-anchor="middle" fill="#CFD3DC" font-size="10" font-weight="700">${p.bf}%</text>`;
+      const d2 = new Date(p.date + "T00:00:00");
+      out += `<text x="${X(i)}" y="${H-8}" text-anchor="middle" fill="#8b93a5" font-size="9">${d2.getMonth()+1}/${d2.getDate()}</text>`;
+    });
+    chart = `<div style="margin-top:8px"><svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block">${out}</svg>
+      <div style="font-size:10px;color:var(--dim);margin-top:2px"><span style="color:#A8C4E0;font-weight:800">lean mass</span> · <span style="color:#e0a86a;font-weight:800">fat mass</span> · labels = body fat % · the recomp picture a scale can't show</div></div>`;
+  }
+  return `<div class="card"><div class="row"><div class="grow"><div class="d-name">🩻 Body composition — DEXA</div>
+    <div class="d-meta">${dx.length} scan${dx.length > 1 ? "s" : ""} · latest ${fmtDate(last.date)}</div></div>
+    <button class="btn-sm" data-act="dexa">+ scan</button></div>
+    <div style="margin-top:8px">${tiles}</div>${chart}</div>`;
+}
+function dexaMenu(c){
+  const wrap = document.createElement("div");
+  wrap.className = "modal-bg";
+  const rows = (c.dexa || []).slice().reverse().map(s => `<div class="minirow" style="align-items:center">
+    <div class="grow" style="font-size:12px">${fmtDate(s.date)} — <b>${s.bf}%</b>${s.lean != null ? ` · lean ${s.lean}` : ""}${s.fat != null ? ` · fat ${s.fat}` : ""}${s.vat != null ? ` · VAT ${s.vat}` : ""}</div>
+    <button class="btn-x" data-dxdel="${s.date}">✕</button></div>`).join("");
+  wrap.innerHTML = `<div class="modal" style="max-height:84vh;overflow-y:auto"><h2 style="margin-top:0">${esc(c.name)} — DEXA scans</h2>
+    ${rows || `<div class="muted" style="font-size:12px">No scans yet — enter the numbers straight off the report.</div>`}
+    <div style="border-top:1px solid var(--line);margin:10px 0 8px"></div>
+    <div class="minirow"><span class="lbl" style="width:64px">date</span><input type="date" id="dxDate" value="${todayISO()}" style="flex:1"></div>
+    <div class="minirow"><span class="lbl" style="width:64px">body fat</span><input type="number" inputmode="decimal" id="dxBf" placeholder="%" style="width:80px"><span class="lbl">%</span></div>
+    <div class="minirow"><span class="lbl" style="width:64px">lean</span><input type="number" inputmode="decimal" id="dxLean" placeholder="lbs" style="width:80px">
+      <span class="lbl" style="width:34px">fat</span><input type="number" inputmode="decimal" id="dxFat" placeholder="lbs" style="width:80px"></div>
+    <div class="minirow"><span class="lbl" style="width:64px">VAT</span><input type="number" inputmode="decimal" id="dxVat" placeholder="optional" style="width:100px"></div>
+    <button class="btn" style="width:100%;margin-top:10px" id="dxAdd">Save scan</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="dxClose">Close</button>
+    <div class="muted" style="font-size:10px;margin-top:6px">Body fat % required; lean/fat mass make the recomp chart. Shows on their Charts tab and their link's progress page.</div></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", ev => {
+    if (ev.target === wrap || ev.target.id === "dxClose"){ wrap.remove(); return; }
+    const del = ev.target.closest("[data-dxdel]");
+    if (del){ appConfirm("Delete this scan?", () => { c.dexa = (c.dexa || []).filter(s => s.date !== del.dataset.dxdel); save(); autoBackup(true); wrap.remove(); render(); dexaMenu(c); }, { yes: "Delete", danger: true }); return; }
+    if (ev.target.id === "dxAdd"){
+      const bf = parseFloat(wrap.querySelector("#dxBf").value);
+      if (isNaN(bf) || bf <= 0 || bf >= 70){ toast("Enter the body fat % from the report"); return; }
+      const g = id => { const v = parseFloat(wrap.querySelector(id).value); return isNaN(v) ? null : v; };
+      addDexa(c, { date: wrap.querySelector("#dxDate").value || todayISO(), bf, lean: g("#dxLean"), fat: g("#dxFat"), vat: g("#dxVat") });
+      save(); autoBackup(true); wrap.remove(); render(); toast("Scan saved — charted for you and visible on their link");
+    }
+  });
+}
+
 /* ---- fix/delete a chart data point (bad entry noticed later) ---- */
 function findChartEntries(c, name, date){
   const hits = [];
@@ -2390,8 +2482,8 @@ function buildChartCards(c){
     .map(n=>({ n, pts: series[n].filter(p=>p.date >= cutoff) }))
     .filter(o=>o.pts.length)
     .sort((a,b)=>b.pts[b.pts.length-1].date.localeCompare(a.pts[a.pts.length-1].date));
-  if (!entries.length) return `<div class="empty">No weighted lifts match — widen the range or clear the search.</div>`;
-  return entries.map(({n, pts})=>{
+  if (!entries.length) return dexaCard(c) + `<div class="empty">No weighted lifts match — widen the range or clear the search.</div>`;
+  return dexaCard(c) + entries.map(({n, pts})=>{
     const bwMode = pts.some(p=>p.bw);
     const duMode = pts.some(p=>p.du);
     const pwMode = pts.some(p=>p.pw);
@@ -3275,6 +3367,7 @@ function clientMenu(){
     <button class="btn2" style="width:100%" id="cmProfile">Edit profile / goals / injuries</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmPhoto">📸 Log progress photos today</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmEmail">✉ Email${c.email?`  <span style="color:var(--dim);font-size:11px">${esc(c.email)}</span>`:"…"}</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="cmDexa">🩻 DEXA scans${c.dexa&&c.dexa.length?` <span style="color:var(--dim);font-size:11px">${c.dexa[c.dexa.length-1].bf}% latest</span>`:"…"}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmWkGoal">🎯 Weekly goal${c.weeklyGoal?` <span style="color:var(--dim);font-size:11px">${c.weeklyGoal}/wk</span>`:"…"}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmSched">📅 Scheduled sessions…</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmProgram">📋 Program…${c.program?` <span style="color:#7dc98f;font-size:11px">(${c.program.days.length}-day assigned)</span>`:""}</button>
@@ -3295,6 +3388,7 @@ function clientMenu(){
         save(); render(); toast(t?`Training age set — fatigue model now expects a ${Math.round(trainingYears(c))}-year-adapted system`:"Training age cleared"); }); }
     if (ev.target.id==="cmPhoto"){ c.photoLog=c.photoLog||[]; if (!c.photoLog.includes(todayISO())){ c.photoLog.push(todayISO()); c.photoLog.sort(); save(); render(); toast("Progress photos logged for today"); } else toast("Already logged today"); wrap.remove(); }
     if (ev.target.id==="cmEmail"){ wrap.remove(); appPrompt("Client email (used for reports and missed-session accountability emails):", c.email||"", v=>{ const e2=v.trim(); if (e2) c.email=e2; else delete c.email; save(); autoBackup(true); render(); toast(e2?"Email saved":"Email cleared"); }); }
+    if (ev.target.id==="cmDexa"){ wrap.remove(); dexaMenu(c); }
     if (ev.target.id==="cmWkGoal"){ wrap.remove(); appPrompt("Sessions per week goal (blank or 0 = off). Drives their booking counter + Monday/Thursday accountability emails:", c.weeklyGoal||"", v=>{ const n = parseInt(v,10); if (n>0) c.weeklyGoal = n; else delete c.weeklyGoal; save(); autoBackup(true); render(); toast(n>0?`Goal set — ${n} sessions/week`:"Weekly goal off"); }); }
     if (ev.target.id==="cmSched"){ wrap.remove(); schedView(c); }
     if (ev.target.id==="cmProgram"){ wrap.remove(); programMenu(c); }
@@ -3884,6 +3978,7 @@ function bind(){
       else if (a==="settings") settingsMenu();
       else if (a==="client-menu") clientMenu();
       else if (a==="mvnew") mvNewModal(client());
+      else if (a==="dexa") dexaMenu(client());
       else if (a==="add-client") addClient();
       else if (a==="save-rec") saveRecovery();
       else if (a==="whoop-sync") syncWhoop();

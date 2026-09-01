@@ -429,6 +429,7 @@ export default {
           program: c.program || null,
           sched: await schedGet(env, c.id),
           weeklyGoal: c.weeklyGoal || null,
+          dexa: c.dexa || [],
           recovery: (c.recovery || []).slice(-30),
           injuries: (c.injuries || []).filter(i => i.status !== "cleared").map(i => ({
             label: i.label, chronic: !!i.chronic, onset: i.onset, side: i.side || null,

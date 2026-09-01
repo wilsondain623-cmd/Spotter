@@ -939,6 +939,20 @@ function progressView(){
   </div>
   ${names.length?`<div class="card"><h1>Lift progress</h1><div class="sub" style="margin-bottom:10px">Your strongest set each session — direction matters more than any single day.</div>${names.map(n=>miniChart(n, series[n])).join("")}</div>`:""}
   ${prs.length?`<div class="card"><h1>Personal records</h1>${prs.map(p=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)"><span>${esc(p.exercise)}</span><b style="color:var(--ice)">${p.bw?`${p.reps} reps`:p.hold?`${p.secs}s hold`:`${p.weight} lbs`}</b></div>`).join("")}</div>`:""}
+  ${(me.dexa||[]).length?(function(){
+    const dx = me.dexa, last = dx[dx.length-1], prev = dx.length>1?dx[dx.length-2]:null;
+    const dd = (v,p,inv)=>{ if(v==null||p==null) return ""; const d=Math.round((v-p)*10)/10; if(!d) return "";
+      const good = inv?d<0:d>0; return ` <span style="color:${good?"#8fd0a8":"#e0a86a"};font-size:11px">${d>0?"+":""}${d}</span>`; };
+    const tile=(l,v,u,delta)=>`<div style="background:var(--panel2);border-radius:9px;padding:9px 4px;text-align:center"><div style="font-weight:800;font-size:15px">${v!=null?v+u:"—"}${delta}</div><div style="color:var(--dim);font-size:10px">${l}</div></div>`;
+    return `<div class="card"><h1>Body composition — DEXA</h1>
+      <div class="sub">The scan sees what a scale can't: muscle up and fat down at the same time both count as wins.</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px">
+        ${tile("body fat", last.bf, "%", prev?dd(last.bf,prev.bf,true):"")}
+        ${tile("lean", last.lean, " lb", prev?dd(last.lean,prev.lean,false):"")}
+        ${tile("fat", last.fat, " lb", prev?dd(last.fat,prev.fat,true):"")}
+        ${tile("visceral", last.vat, "", prev?dd(last.vat,prev.vat,true):"")}</div>
+      ${dx.length>1?`<div style="font-size:11px;color:var(--dim);margin-top:8px">${dx.length} scans · since ${dx[0].date}: body fat ${dx[0].bf}% → ${last.bf}%${last.lean!=null&&dx[0].lean!=null?` · lean ${dx[0].lean} → ${last.lean} lb`:""}</div>`:""}
+    </div>`; })():""}
   ${(me.injuries||[]).length?`<div class="card"><h1>Recovery tracking</h1>${me.injuries.map(i=>{
     const ci = i.checkIns[i.checkIns.length-1];
     return `<div style="padding:8px 0;border-bottom:1px solid var(--line)"><div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:13px"><b>${esc(i.label)}</b>${ci?`<span style="color:var(--dim)"> · pain ${ci.pain}/10 latest</span>`:""}</div>${painSpark(i.checkIns)}</div>
