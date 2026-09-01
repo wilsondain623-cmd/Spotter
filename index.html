@@ -1128,6 +1128,14 @@ function reviewView(){
           <button class="btn2 grow" style="color:#e0a8a8" data-subreject="${i}">Reject</button>
         </div></div>`;
     }
+    if (s.kind === "miss" || s.kind === "missreason"){
+      return `<div class="card" style="border-color:${s.kind==="miss"?"#c95f5f55":"#d4a04d55"}">
+        <div class="row"><div class="grow"><div class="cname">${s.kind==="miss"?"⚠":"💬"} ${esc(name)} — ${s.kind==="miss"?"missed scheduled session":"gave a reason"}</div>
+        <div class="csub">${fmtDate(s.date)} · ${esc(s.text)}</div></div></div>
+        <div class="row" style="gap:8px;margin-top:10px">
+          <button class="btn2 grow" data-subapprove="${i}">Acknowledge</button>
+        </div></div>`;
+    }
     if (s.kind === "program" && Array.isArray(s.items)){
       const prog = c && c.program;
       const tmap = {};
@@ -1216,6 +1224,7 @@ function rosterView(){
         ? `<span class="chip hot">${b.recovering[0]} ${E.round1(b.current[b.recovering[0]])}</span>`
         : (last!=null && last<=10 ? `<span class="chip fresh">fresh</span>` : ``));
     const injN = flaggedInjuries(c).length;
+    const missN = (pendingSubs||[]).filter(s=>s.client===c.id && s.kind==="miss").length;
     let payChip = "";
     if (c.pay && c.pay.type==="pack" && c.pay.started){ const left = Math.max(0,(c.pay.size||10)-packUsed(c));
       if (left<=2) payChip = `<span class="chip" style="color:${left===0?"#c95f5f":"#d4a04d"};border-color:#d4a04d55">${left===0?"renew":left+" left"}</span>`; }
@@ -1223,7 +1232,7 @@ function rosterView(){
       <div class="avatar">${esc(c.name[0])}</div>
       <div class="grow"><div class="cname">${esc(c.name)}</div>
       <div class="csub">${last===null?"no sessions logged":last===0?"trained today":last+" days since last session"}</div></div>
-      ${injN?`<span class="chip" style="color:#e3c8ec;border-color:${INJ_COLOR}66">⚠ ${injN}</span>`:""}${payChip}${status}</div>`;
+      ${missN?`<span class="chip" style="color:#e0a8a8;border-color:#c95f5f66">✗ missed</span>`:""}${injN?`<span class="chip" style="color:#e3c8ec;border-color:${INJ_COLOR}66">⚠ ${injN}</span>`:""}${payChip}${status}</div>`;
   }).join("");
   const subBanner = (S.syncUrl && pendingSubs && pendingSubs.length)
     ? `<div class="card" style="border-color:#4D7DB4;cursor:pointer" data-act="review"><div class="row">
@@ -3230,6 +3239,27 @@ function programTargets(c){
   });
 }
 
+function schedView(c){
+  if (!S.syncUrl || !S.syncKey){ toast("Set up sync in ⛭ first"); return; }
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/sched?c=${encodeURIComponent(c.id)}&key=${encodeURIComponent(S.syncKey)}`)
+    .then(r=>r.json()).then(d=>{
+      const slots = (d.slots||[]).slice(-30).reverse();
+      const done = slots.filter(s=>s.status==="done").length;
+      const missed = slots.filter(s=>s.status==="missed").length;
+      const stat = s => s.status==="done" ? `<span style="color:#7dc98f">✓ done</span>`
+        : s.status==="missed" ? `<span style="color:#e0a8a8">✗ missed${s.emailed?" · emailed":""}${s.reason?` — "${esc(s.reason)}"`:""}</span>`
+        : s.status==="canceled" ? `<span style="color:var(--dim)">canceled</span>`
+        : `<span style="color:var(--ice)">upcoming</span>`;
+      const wrap = document.createElement("div");
+      wrap.className = "modal-bg";
+      wrap.innerHTML = `<div class="modal" style="max-height:80vh;overflow-y:auto"><h2 style="margin-top:0">${esc(c.name)} — schedule</h2>
+        <div style="font-size:12px;color:#CFD3DC;margin-bottom:8px">${done+missed?`Adherence: <b style="color:${missed>done?"#e0a8a8":"#7dc98f"}">${done}/${done+missed}</b> planned sessions completed`:"No history yet"}${d.strikes?` · current streak of misses: <b style="color:#e0a8a8">${d.strikes}</b>`:""}</div>
+        ${slots.length?slots.map(s=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid var(--line)"><span>${fmtDate(s.d)}${s.t?" · "+s.t:""}</span>${stat(s)}</div>`).join(""):`<div class="muted">They haven't scheduled anything yet — sessions get booked from their link.</div>`}
+        <button class="btn2" style="width:100%;margin-top:10px" id="svClose">Close</button></div>`;
+      document.body.appendChild(wrap);
+      wrap.addEventListener("click", ev=>{ if (ev.target===wrap||ev.target.id==="svClose") wrap.remove(); });
+    }).catch(()=>toast("Couldn't reach the sync server"));
+}
 function clientMenu(){
   const c = client(); if (!c) return;
   const wrap = document.createElement("div");
@@ -3238,6 +3268,8 @@ function clientMenu(){
     <h2 style="margin-top:0">${esc(c.name)}</h2>
     <button class="btn2" style="width:100%" id="cmProfile">Edit profile / goals / injuries</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmPhoto">📸 Log progress photos today</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="cmEmail">✉ Email${c.email?`  <span style="color:var(--dim);font-size:11px">${esc(c.email)}</span>`:"…"}</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="cmSched">📅 Scheduled sessions…</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmProgram">📋 Program…${c.program?` <span style="color:#7dc98f;font-size:11px">(${c.program.days.length}-day assigned)</span>`:""}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmPay">Payment & sessions…</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmTrain">Training history${c.trainStart?` (since ${esc(c.trainStart)})`:"…"}</button>
@@ -3255,6 +3287,8 @@ function clientMenu(){
         const t = v.trim(); if (!t){ delete c.trainStart; } else if (/^\d{4}(-\d{2}(-\d{2})?)?$/.test(t)){ c.trainStart = t; } else { toast("Use a year like 2015"); return; }
         save(); render(); toast(t?`Training age set — fatigue model now expects a ${Math.round(trainingYears(c))}-year-adapted system`:"Training age cleared"); }); }
     if (ev.target.id==="cmPhoto"){ c.photoLog=c.photoLog||[]; if (!c.photoLog.includes(todayISO())){ c.photoLog.push(todayISO()); c.photoLog.sort(); save(); render(); toast("Progress photos logged for today"); } else toast("Already logged today"); wrap.remove(); }
+    if (ev.target.id==="cmEmail"){ wrap.remove(); appPrompt("Client email (used for reports and missed-session accountability emails):", c.email||"", v=>{ const e2=v.trim(); if (e2) c.email=e2; else delete c.email; save(); autoBackup(true); render(); toast(e2?"Email saved":"Email cleared"); }); }
+    if (ev.target.id==="cmSched"){ wrap.remove(); schedView(c); }
     if (ev.target.id==="cmProgram"){ wrap.remove(); programMenu(c); }
     if (ev.target.id==="cmPay"){ wrap.remove(); payMenu(c); }
     if (ev.target.id==="cmRename"){ wrap.remove(); appPrompt("New name:", c.name, n=>{ if (n.trim()){ c.name=n.trim(); save(); render(); } }); }
@@ -3365,6 +3399,10 @@ function approveSub(idx){
     const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
     ackSub(sid); render(); toast(`Check-in attached to ${inj.label}`);
     }
+  }
+  if (s.kind === "miss" || s.kind === "missreason"){
+    const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
+    ackSub(sid); render(); return;
   }
   if (s.kind === "program" && Array.isArray(s.items)){
     const items = s.items.filter(it=>!it.skipped).map(it=>{
@@ -3619,6 +3657,8 @@ function addClient(){
     </div>
     <div style="font-size:12px;color:#CFD3DC;margin-top:10px">Goals</div>
     <input type="text" id="ncGoals" placeholder="e.g. fat loss, first pull-up, pain-free movement" style="width:100%;margin-top:4px">
+    <div style="font-size:12px;color:#CFD3DC;margin-top:10px">Email <span style="color:var(--dim);font-size:10px">(for reports + missed-session accountability)</span></div>
+    <input type="email" id="ncEmail" placeholder="client@email.com" style="width:100%;margin-top:4px">
     <div style="font-size:12px;color:#CFD3DC;margin-top:10px">Payment</div>
     <div class="row" style="gap:6px;margin-top:5px">
       ${[["none","None yet"],["pack","Session pack"],["monthly","Monthly"]].map(([k,l],i)=>`<button class="btn2 grow ncpay" data-p="${k}" style="font-size:12px;${i===0?"border-color:var(--steel)":""}">${l}</button>`).join("")}
@@ -3646,7 +3686,8 @@ function addClient(){
       if (!name){ toast("Give them a name first"); return; }
       const id = name.toLowerCase().replace(/\s+/g,"-");
       if (S.clients.some(c=>c.id===id)){ toast("That client already exists"); return; }
-      const c = { id, name, profile: wrap.querySelector("#ncGoals").value.trim(), snapshot:zeroSnap(), sysFatigue:0, recovery:[], injuries:[], lastUpdated:todayISO(), sessions:[], prs:[], notes:[], nextPlan:"" };
+      const _em = wrap.querySelector("#ncEmail").value.trim();
+      const c = { id, name, profile: wrap.querySelector("#ncGoals").value.trim(), ...(_em?{email:_em}:{}), snapshot:zeroSnap(), sysFatigue:0, recovery:[], injuries:[], lastUpdated:todayISO(), sessions:[], prs:[], notes:[], nextPlan:"" };
       const opt = EXP_OPTS.find(o=>o[0]===exp);
       if (opt){
         if (opt[0] === "never"){ c.novTrust = true; }

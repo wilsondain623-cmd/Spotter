@@ -118,7 +118,87 @@ async function serveVideo(env, key, request) {
   return new Response(obj.body, { status: 200, headers: { ...base, "Content-Length": String(total) } });
 }
 
+/* ---- scheduling helpers (ET day boundary; fixed -5 offset keeps "morning after" semantics) ---- */
+function etToday(){ return new Date(Date.now() - 5 * 3600000).toISOString().slice(0, 10); }
+async function schedGet(env, c){
+  try { const v = await env.TOKENS.get("sched:" + c); if (v) return JSON.parse(v); } catch {}
+  return { slots: [], strikes: 0 };
+}
+async function schedSave(env, c, rec){ await env.TOKENS.put("sched:" + c, JSON.stringify(rec)); }
+async function pushSub(env, c, rec){
+  await env.TOKENS.put("sub:" + c + ":" + Date.now() + ":" + crypto.randomUUID().slice(0, 8),
+    JSON.stringify({ client: c, submitted: new Date().toISOString(), ...rec }), { expirationTtl: 60 * 86400 });
+}
+function missEmail(name, slot, strikes, link){
+  const first = (name || "there").split(" ")[0];
+  if (strikes <= 1) return {
+    subject: `Missed you yesterday, ${first}`,
+    html: `<p>Hey ${first},</p><p>I saw you had a session planned for ${slot.d}${slot.t ? " at " + slot.t : ""} and it didn't get logged — no stress, life happens.</p><p>What got in the way? Hit reply and let me know, and <a href="${link}">grab your next slot here</a> so we keep the momentum. One missed day never matters — the bounce-back does.</p><p>— Dain · Dwil Fitness</p>` };
+  if (strikes === 2) return {
+    subject: `That's two in a row, ${first} — let's fix it`,
+    html: `<p>Hey ${first},</p><p>Second planned session in a row that didn't happen. I'm not keeping score to guilt you — I'm keeping score because consistency is the entire game, and two misses is how a habit starts slipping.</p><p>Reply and tell me what's actually getting in the way — schedule, energy, motivation, whatever it is, we'll work around it. Then <a href="${link}">book the next one</a>. Even a short session counts.</p><p>— Dain</p>` };
+  return {
+    subject: `${first} — we need to talk`,
+    html: `<p>${first},</p><p>That's ${strikes} planned sessions missed in a row. You hired me to hold you accountable, so here it is: something isn't working, and I'd rather fix the plan than watch it quietly die.</p><p>Reply to this email or text me today — tell me honestly what's going on. We can change the days, shorten the sessions, or rebuild the program. What we're not going to do is let it slide.</p><p>— Dain</p>` };
+}
+async function sendMissEmail(env, to, name, slot, strikes, link){
+  if (!env.RESEND_KEY || !env.FROM_EMAIL || !to) return false;
+  const m = missEmail(name, slot, strikes, link);
+  try {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + env.RESEND_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: `Dain — Dwil Fitness <${env.FROM_EMAIL}>`, to: [to],
+        subject: m.subject, html: m.html, ...(env.REPLY_TO ? { reply_to: env.REPLY_TO } : {}) }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+async function runMissCheck(env){
+  const today = etToday();
+  const state = await getState(env);
+  if (!state) return { checked: 0, misses: 0, note: "no backup" };
+  const pendList = await env.TOKENS.list({ prefix: "sub:" });
+  const pendDates = {};
+  for (const k of pendList.keys){
+    const v = await env.TOKENS.get(k.name);
+    if (!v) continue;
+    try { const s = JSON.parse(v); if (s.kind === "session" || s.kind === "program" || !s.kind)
+      (pendDates[s.client] = pendDates[s.client] || new Set()).add(s.date); } catch {}
+  }
+  let checked = 0, misses = 0, emails = 0;
+  const schedKeys = await env.TOKENS.list({ prefix: "sched:" });
+  for (const k of schedKeys.keys){
+    const c = k.name.slice(6);
+    const rec = await schedGet(env, c);
+    const client = state.clients.find(x => x.id === c);
+    let changed = false;
+    const ordered = [...rec.slots].sort((a, b) => (a.d + (a.t || "")).localeCompare(b.d + (b.t || "")));
+    for (const s of ordered){
+      if (s.status !== "open" || s.d >= today) continue;
+      checked++;
+      const logged = (client && (client.sessions || []).some(x => x.date === s.d))
+        || (pendDates[c] && pendDates[c].has(s.d));
+      if (logged){ s.status = "done"; rec.strikes = 0; changed = true; continue; }
+      s.status = "missed"; rec.strikes = (rec.strikes || 0) + 1; misses++; changed = true;
+      await pushSub(env, c, { kind: "miss", date: s.d, title: "Missed scheduled session",
+        text: `Planned ${s.d}${s.t ? " at " + s.t : ""} — nothing logged. Strike ${rec.strikes}.` });
+      if (client && client.email){
+        const base = (env.ALLOWED_ORIGIN || "") + "/Spotter/log.html";
+        const link = client.token ? `${base}?c=${encodeURIComponent(c)}&t=${encodeURIComponent(client.token)}&w=${encodeURIComponent("https://dwil-sync.wilsondain623.workers.dev")}` : base;
+        const ok = await sendMissEmail(env, client.email, client.name, s, rec.strikes, link);
+        if (ok){ s.emailed = true; emails++; }
+      }
+    }
+    /* prune ancient resolved slots */
+    if (rec.slots.length > 60) rec.slots = rec.slots.slice(-60);
+    if (changed) await schedSave(env, c, rec);
+  }
+  return { checked, misses, emails, today };
+}
+
 export default {
+  async scheduled(event, env, ctx){ ctx.waitUntil(runMissCheck(env)); },
   async fetch(request, env) {
     const url = new URL(request.url);
     const workerBase = url.origin;
@@ -279,6 +359,7 @@ export default {
           photoLog: c.photoLog || [],
           pay: c.pay && c.pay.type === "pack" ? { type: "pack", size: c.pay.size, used: null } : null,
           program: c.program || null,
+          sched: await schedGet(env, c.id),
           recovery: (c.recovery || []).slice(-30),
           injuries: (c.injuries || []).filter(i => i.status !== "cleared").map(i => ({
             label: i.label, chronic: !!i.chronic, onset: i.onset, side: i.side || null,
@@ -304,6 +385,52 @@ export default {
         if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
         const v = await env.TOKENS.get("assess");
         return cors(env, v || "[]");
+      }
+
+      /* ---- client session scheduling + accountability ---- */
+      if (url.pathname === "/sched" && request.method === "POST") {
+        const c = url.searchParams.get("c");
+        const okc = await clientByToken(env, c, url.searchParams.get("t"));
+        if (!okc) return cors(env, JSON.stringify({ error: "bad token" }), 403);
+        let body;
+        try { body = await request.json(); } catch { return cors(env, JSON.stringify({ error: "bad json" }), 400); }
+        const rec = await schedGet(env, c);
+        const today = etToday();
+        if (body.add && /^\d{4}-\d{2}-\d{2}$/.test(body.add.d || "")){
+          if (body.add.d < today) return cors(env, JSON.stringify({ error: "past date" }), 400);
+          if (rec.slots.some(s => s.d === body.add.d && s.status === "open")) return cors(env, JSON.stringify({ error: "already booked that day" }), 400);
+          if (rec.slots.filter(s => s.status === "open").length >= 14) return cors(env, JSON.stringify({ error: "too many open slots" }), 400);
+          rec.slots.push({ d: body.add.d, t: String(body.add.t || "").slice(0, 5), status: "open" });
+          rec.slots.sort((a, b) => (a.d + a.t).localeCompare(b.d + b.t));
+        } else if (body.cancel){
+          const s = rec.slots.find(x => x.d === body.cancel && x.status === "open");
+          if (!s) return cors(env, JSON.stringify({ error: "not found" }), 404);
+          if (s.d <= today) return cors(env, JSON.stringify({ error: "too late to cancel — day already started" }), 400);
+          s.status = "canceled";
+        } else if (body.reason && /^\d{4}-\d{2}-\d{2}$/.test(body.reason.d || "")){
+          const s = rec.slots.find(x => x.d === body.reason.d && x.status === "missed" && !x.reason);
+          if (!s) return cors(env, JSON.stringify({ error: "not found" }), 404);
+          s.reason = String(body.reason.why || "").slice(0, 300);
+          await pushSub(env, c, { kind: "missreason", date: s.d, title: "Missed-session reason",
+            text: `${s.d}${s.t ? " " + s.t : ""} — ${s.reason}` });
+        } else return cors(env, JSON.stringify({ error: "bad request" }), 400);
+        await schedSave(env, c, rec);
+        return cors(env, JSON.stringify({ ok: true, sched: rec }));
+      }
+      if (url.pathname === "/sched") {
+        const c = url.searchParams.get("c");
+        if (!c) return cors(env, JSON.stringify({ error: "missing c" }), 400);
+        const isTrainer = env.APP_KEY && url.searchParams.get("key") === env.APP_KEY;
+        if (!isTrainer) {
+          const okc = await clientByToken(env, c, url.searchParams.get("t"));
+          if (!okc) return cors(env, JSON.stringify({ error: "bad token" }), 403);
+        }
+        return cors(env, JSON.stringify(await schedGet(env, c)));
+      }
+      if (url.pathname === "/misscheck") { /* manual trigger for testing */
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        const out = await runMissCheck(env);
+        return cors(env, JSON.stringify(out));
       }
 
       /* ---- assigned program: full rich HTML per client ---- */

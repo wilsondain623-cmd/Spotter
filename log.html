@@ -580,6 +580,8 @@ let progDay = null;    /* selected day index */
 let progExpanded = {}; /* exercise how-to open */
 let progSkip = {};     /* skipped exercises this session */
 let progSent = false;
+let schedBusy = false;
+let missAnswered = {};
 let me = null;         /* /me payload */
 let meErr = null;
 let recSent = false;
@@ -723,6 +725,73 @@ function painSpark(cis){
     return (j?`<line x1="${5+100*(j-1)/(pts.length-1)}" y1="${21-17*pts[j-1]/10}" x2="${x}" y2="${y}" stroke="#ba68c8" stroke-width="1.5"/>`:"") + `<circle cx="${x}" cy="${y}" r="1.8" fill="#e3c8ec"/>`;
   }).join("")}</svg>`;
 }
+/* ---- session scheduling + accountability ---- */
+function schedPost(body, cb){
+  if (schedBusy) return; schedBusy = true;
+  fetch(`${worker}/sched?c=${encodeURIComponent(client)}&t=${encodeURIComponent(token)}`, {
+    method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)
+  }).then(r=>r.json()).then(d=>{ schedBusy = false;
+    if (d.ok){ if (me) me.sched = d.sched; cb && cb(true); render(); }
+    else { alert(d.error || "Couldn't update the schedule — try again"); cb && cb(false); }
+  }).catch(()=>{ schedBusy = false; alert("Network error — retry."); });
+}
+function pendingMiss(){
+  if (!me || !me.sched) return null;
+  return (me.sched.slots||[]).find(s => s.status === "missed" && !s.reason && !missAnswered[s.d]) || null;
+}
+function missCard(s){
+  return `<div class="card" style="border-color:#d4a04d66">
+    <h1 style="font-size:16px">You had a session planned ${s.d}${s.t?" at "+s.t:""} — what happened?</h1>
+    <div class="sub">No judgment — your coach just needs to know so the plan can adjust.</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+      ${["Got sick","Schedule conflict","Traveling","Too tired","Just didn't get to it"].map(r2=>`<button class="mreason" data-mr="${r2}" style="padding:9px 12px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);color:var(--text);font-size:13px">${r2}</button>`).join("")}
+    </div>
+    <input type="text" id="mrOther" placeholder="or tell them in your own words…" style="margin-top:10px">
+    <button class="btn" id="mrSend" style="margin-top:8px">Send</button>
+  </div>`;
+}
+function schedCard(){
+  if (!me || !me.sched) return "";
+  const today = todayISO();
+  const up = (me.sched.slots||[]).filter(s=>s.status==="open" && s.d>=today).slice(0,5);
+  return `<div class="card"><h1 style="font-size:16px">My session schedule</h1>
+    <div class="sub">Booking a time makes it real — you'll hear from your coach if it doesn't happen.</div>
+    ${up.length?up.map(s=>`<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:6px 0;border-bottom:1px solid var(--line)">
+      <span>${s.d}${s.t?" · "+s.t:""}</span>
+      ${s.d>today?`<button data-scx="${s.d}" style="background:none;border:none;color:var(--dim);font-size:12px;cursor:pointer">cancel</button>`:`<span style="color:var(--ice);font-size:11px">today</span>`}</div>`).join("")
+      :`<div class="muted" style="margin-top:6px">Nothing booked — pick your next session:</div>`}
+    <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+      <input type="date" id="scDate" min="${today}" style="flex:1;margin:0">
+      <input type="time" id="scTime" style="width:110px;margin:0">
+      <button class="btn" id="scAdd" style="margin:0;padding:10px 14px">Book</button></div>
+  </div>`;
+}
+function wireSched(){
+  const a = app.querySelector("#scAdd");
+  if (a) a.addEventListener("click", ()=>{
+    const d = (app.querySelector("#scDate")||{}).value;
+    if (!d){ alert("Pick a date first"); return; }
+    schedPost({ add: { d, t: (app.querySelector("#scTime")||{}).value || "" } });
+  });
+  app.querySelectorAll("[data-scx]").forEach(b=>b.addEventListener("click", ()=>{
+    if (window.confirm && !window.confirm("Cancel this planned session?")) return;
+    schedPost({ cancel: b.dataset.scx });
+  }));
+  app.querySelectorAll(".mreason").forEach(b=>b.addEventListener("click", ()=>{
+    const s = pendingMiss(); if (!s) return;
+    missAnswered[s.d] = true;
+    schedPost({ reason: { d: s.d, why: b.dataset.mr } });
+  }));
+  const ms = app.querySelector("#mrSend");
+  if (ms) ms.addEventListener("click", ()=>{
+    const s = pendingMiss(); if (!s) return;
+    const why = (app.querySelector("#mrOther")||{}).value.trim();
+    if (!why){ alert("Tap a reason or type one"); return; }
+    missAnswered[s.d] = true;
+    schedPost({ reason: { d: s.d, why } });
+  });
+}
+
 /* ---- assigned program workout flow ---- */
 function actsGet(){ try { return JSON.parse(localStorage.getItem("dwil-prog-acts")||"{}"); } catch(e){ return {}; } }
 function actsSave(a){ try { localStorage.setItem("dwil-prog-acts", JSON.stringify(a)); } catch(e){} }
@@ -737,7 +806,7 @@ function workoutView(){
   const p = me.program;
   if (!p || !p.days || !p.days.length) return `<div class="card"><h1>No program assigned yet</h1><div class="sub">Your coach hasn't set one up — use the Log tab to send workouts in the meantime.</div></div>`;
   if (progSent) return `<div class="card done" style="padding:22px"><div style="font-size:26px">✓</div><h1 style="margin-top:8px">Workout sent</h1><div class="sub">Your coach will review it. Great work today.</div>
-    <button class="btn" id="woAgain" style="margin-top:12px">Log another workout</button></div>`;
+    <button class="btn" id="woAgain" style="margin-top:12px">Log another workout</button></div>` + schedCard();
   const sug = suggestedDay(p);
   if (progDay == null) progDay = sug;
   const day = p.days[progDay] || p.days[0];
@@ -889,8 +958,9 @@ function render(){
     app.querySelector("#tabProg").addEventListener("click", ()=>{ tab="progress"; render(); });
   };
   if (tab === "workout"){
-    app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}${workoutView()}`;
-    wireTabs();
+    const _miss = pendingMiss();
+    app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}${_miss?missCard(_miss):(schedCard()+workoutView())}`;
+    wireTabs(); wireSched();
     app.querySelectorAll("[data-pd]").forEach(b=>b.addEventListener("click", ()=>{ progDay = +b.dataset.pd; progSkip = {}; progEff = {}; render(); }));
     app.querySelectorAll("[data-how]").forEach(b=>b.addEventListener("click", ()=>{ const k=+b.dataset.how; progExpanded[k]=!progExpanded[k]; render(); }));
     app.querySelectorAll("[data-skip]").forEach(b=>b.addEventListener("click", ()=>{ const k=+b.dataset.skip; progSkip[k]=!progSkip[k]; if(!progSkip[k])delete progSkip[k]; render(); }));
@@ -920,7 +990,9 @@ function render(){
     ${photoCard()}
     ${painCard()}
     ${moveCard()}`;
-  wireTabs();
+  { const _m2 = pendingMiss(); if (_m2){ app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}` + missCard(_m2); wireTabs(); wireSched(); return; } }
+  app.innerHTML += schedCard();
+  wireTabs(); wireSched();
   const ta = app.querySelector("#t");
   const pv = app.querySelector("#prev");
   pv.innerHTML = preview(t);
