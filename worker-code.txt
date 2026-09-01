@@ -142,17 +142,7 @@ function missEmail(name, slot, strikes, link){
     html: `<p>${first},</p><p>That's ${strikes} planned sessions missed in a row. You hired me to hold you accountable, so here it is: something isn't working, and I'd rather fix the plan than watch it quietly die.</p><p>Reply to this email or text me today — tell me honestly what's going on. We can change the days, shorten the sessions, or rebuild the program. What we're not going to do is let it slide.</p><p>— Dain</p>` };
 }
 async function sendMissEmail(env, to, name, slot, strikes, link){
-  if (!env.RESEND_KEY || !env.FROM_EMAIL || !to) return false;
-  const m = missEmail(name, slot, strikes, link);
-  try {
-    const r = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { "Authorization": "Bearer " + env.RESEND_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ from: `Dain — Dwil Fitness <${env.FROM_EMAIL}>`, to: [to],
-        subject: m.subject, html: m.html, ...(env.REPLY_TO ? { reply_to: env.REPLY_TO } : {}) }),
-    });
-    return r.ok;
-  } catch { return false; }
+  return sendRawEmail(env, to, missEmail(name, slot, strikes, link));
 }
 function weekStartOf(dISO){
   const d = new Date(dISO + "T00:00:00Z");
@@ -179,17 +169,22 @@ function thursdayEmail(name, booked, goal, link){
   return { subject: `Half the week's gone — ${booked} of ${goal} booked`,
     html: `<p>Hey ${first},</p><p>Quick heads-up: the week's half over and you've got ${booked} of ${goal} sessions booked. Weekends fill up fast — <a href="${link}">grab your remaining slots now</a> so the goal stays realistic.</p><p>— Dain · Dwil Fitness</p>` };
 }
+let _lastEmailErr = null;
 async function sendRawEmail(env, to, m){
-  if (!env.RESEND_KEY || !env.FROM_EMAIL || !to) return false;
+  if (!env.RESEND_KEY){ _lastEmailErr = "no RESEND_KEY"; return false; }
+  if (!env.FROM_EMAIL){ _lastEmailErr = "no FROM_EMAIL"; return false; }
+  if (!to){ _lastEmailErr = "no recipient"; return false; }
   try {
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { "Authorization": "Bearer " + env.RESEND_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ from: `Dain — Dwil Fitness <${env.FROM_EMAIL}>`, to: [to],
+      body: JSON.stringify({ from: `Dwil Fitness <${env.FROM_EMAIL}>`, to: [to],
         subject: m.subject, html: m.html, ...(env.REPLY_TO ? { reply_to: env.REPLY_TO } : {}) }),
     });
-    return r.ok;
-  } catch { return false; }
+    if (!r.ok){ _lastEmailErr = r.status + ": " + (await r.text()).slice(0, 300); return false; }
+    _lastEmailErr = null;
+    return true;
+  } catch (e){ _lastEmailErr = "fetch: " + String(e).slice(0, 200); return false; }
 }
 async function runMissCheck(env, todayArg){
   const today = todayArg || etToday();
@@ -267,7 +262,7 @@ async function runMissCheck(env, todayArg){
     if (rec.slots.length > 60) rec.slots = rec.slots.slice(-60);
     if (changed) await schedSave(env, c, rec);
   }
-  return { checked, misses, emails, today };
+  return { checked, misses, emails, today, ...(_lastEmailErr ? { emailErr: _lastEmailErr } : {}) };
 }
 
 export default {
@@ -500,6 +495,13 @@ export default {
           if (!okc) return cors(env, JSON.stringify({ error: "bad token" }), 403);
         }
         return cors(env, JSON.stringify(await schedGet(env, c)));
+      }
+      if (url.pathname === "/emailtest") { /* diagnose the Resend pipe */
+        if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
+        const to = url.searchParams.get("to");
+        const ok = await sendRawEmail(env, to, { subject: "Spotter email pipe test",
+          html: "<p>If you can read this, coach@dwilfitness.com is wired up and accountability emails are live. — Spotter</p>" });
+        return cors(env, JSON.stringify({ ok, err: _lastEmailErr }));
       }
       if (url.pathname === "/misscheck") { /* manual trigger for testing */
         if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
