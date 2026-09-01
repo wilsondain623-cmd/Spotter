@@ -368,6 +368,12 @@ function detectIntensity(text) {
   for (const w of INTENSITY_WORDS) if (w.rx.test(text)) return w.key;
   return "moderate";
 }
+/* When per-set tokens exist, words after the first token belong to sets — the
+   exercise default comes only from the prefix ("heavy bench: 95x10 warmup, ..."). */
+function segIntensity(seg, tokens){
+  if (tokens && tokens.length && tokens.firstIdx >= 0) return detectIntensity(seg.slice(0, tokens.firstIdx));
+  return detectIntensity(seg);
+}
 
 /* Plain sets×reps: 4x8, 4×8-12, 3 sets of 10, 3x45s, 4 sets.
    First number < 20 (a plausible set count). */
@@ -423,12 +429,14 @@ function parseSetTokens(seg) {
   }
   found.sort((a, b) => a.idx - b.idx);
   /* per-set intensity: an intensity word between this set token and the next belongs to this set */
-  return found.map((t, i) => {
+  const out = found.map((t, i) => {
     const tail = seg.slice(t.end, i + 1 < found.length ? found[i + 1].idx : seg.length);
     let int_ = null;
     for (const w of INTENSITY_WORDS) if (w.rx.test(tail)) { int_ = w.key; break; }
     return int_ ? { weight: t.weight, reps: t.reps, intensity: int_ } : { weight: t.weight, reps: t.reps };
   });
+  out.firstIdx = found.length ? found[0].idx : -1;
+  return out;
 }
 
 function parseWeight(seg) {
@@ -486,7 +494,7 @@ function parseSession(text, customLib) {
     const sr = parseSetsReps(seg);
     const ex = matchExercise(seg, customLib);
     if (ex) {
-      const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: detectIntensity(seg), raw: seg };
+      const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: segIntensity(seg, tokens), raw: seg };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
       if (ex.hold) base.hold = true;
       if (ex.ecc || eccOf(seg, !!(sr && (sr.dur || sr.dist)))) base.ecc = true;
@@ -543,7 +551,7 @@ function parseSession(text, customLib) {
     } else if (sr || tokens.length || (/\b(iso(metric)?|hold)\b/i.test(seg) && timeList(seg).length)) {
       const item = { raw: seg, sets: sr ? sr.sets : tokens.length, reps: sr ? sr.reps : tokens.map(t=>t.reps).join("/"),
         weight: tokens.length ? maxWeight(tokens) : parseWeight(seg),
-        setDetail: tokens.length ? tokens : undefined, intensity: detectIntensity(seg) };
+        setDetail: tokens.length ? tokens : undefined, intensity: segIntensity(seg, tokens) };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) item.bw = true;
       if (eccOf(seg, false)) item.ecc = true;
       if (powOf(seg)) item.pow = true;
@@ -1002,13 +1010,13 @@ function checkPackRenewal(c){
     appConfirm(`${c.name} just used session ${used} of ${size} — pack complete. Set up their next pack now?`, ()=>payMenu(c), {yes:"Set up pack"});
   }, 450);
 }
-function weekSessions(c){ const cut = new Date(Date.now()-7*86400000); const cutISO = cut.getFullYear()+"-"+String(cut.getMonth()+1).padStart(2,"0")+"-"+String(cut.getDate()).padStart(2,"0"); return c.sessions.filter(s=>!s.solo && s.date>cutISO).length; }
+function weekSessions(c, solo){ const cut = new Date(Date.now()-7*86400000); const cutISO = cut.getFullYear()+"-"+String(cut.getMonth()+1).padStart(2,"0")+"-"+String(cut.getDate()).padStart(2,"0"); return c.sessions.filter(s=>(solo?!!s.solo:!s.solo) && s.date>cutISO).length; }
 function payBrief(c){
   const p = c.pay; if (!p || !p.type || p.type==="none") return "";
   if (p.type==="pack"){ const used=packUsed(c), size=p.size||10, left=Math.max(0,size-used);
     return `<div style="margin-top:6px"><span class="bb">Sessions:</span> ${used} of ${size} used${left<=2?` — <span style="color:${left===0?"#c95f5f":"#d4a04d"};font-weight:800">${left} left, time to renew</span>`:` (${left} left)`}</div>`; }
-  const wk = weekSessions(c);
-  return `<div style="margin-top:6px"><span class="bb">This week:</span> ${wk} session${wk===1?"":"s"}${p.weekly?` · target ${p.weekly}/wk`:""}</div>`;
+  const wk = weekSessions(c), wkSolo = weekSessions(c, true);
+  return `<div style="margin-top:6px"><span class="bb">This week:</span> ${wk} session${wk===1?"":"s"}${wkSolo?` <span style="color:var(--dim)">(+${wkSolo} solo)</span>`:""}${p.weekly?` · target ${p.weekly}/wk`:""}</div>`;
 }
 function photoBrief(c){
   const log = c.photoLog||[]; if (!log.length) return "";
@@ -1595,9 +1603,15 @@ function weeklyVolume(c){
   for (const s of c.sessions){
     if (!s.exercises || s.date < cutoff) continue;
     for (const x of s.exercises){
+      if (x.dur || x.dist || x.bouts) continue; /* cardio & sports: minutes aren't hypertrophy sets */
+      let n;
+      if (x.setDetail && x.setDetail.length)
+        n = x.setDetail.filter(sd => (sd.intensity ?? x.intensity) !== "warmup").length; /* working sets only */
+      else n = x.intensity === "warmup" ? 0 : (x.sets || 0);
+      if (!n) continue;
       const m = exMuscles(x.name);
-      for (const g of m.p) vol[g] = (vol[g]||0) + (x.sets||0);
-      for (const g of m.s) vol[g] = (vol[g]||0) + (x.sets||0)*0.5;
+      for (const g of m.p) vol[g] = (vol[g]||0) + n;
+      for (const g of m.s) vol[g] = (vol[g]||0) + n*0.5;
     }
   }
   return vol;

@@ -304,6 +304,12 @@ function detectIntensity(text) {
   for (const w of INTENSITY_WORDS) if (w.rx.test(text)) return w.key;
   return "moderate";
 }
+/* When per-set tokens exist, words after the first token belong to sets — the
+   exercise default comes only from the prefix ("heavy bench: 95x10 warmup, ..."). */
+function segIntensity(seg, tokens){
+  if (tokens && tokens.length && tokens.firstIdx >= 0) return detectIntensity(seg.slice(0, tokens.firstIdx));
+  return detectIntensity(seg);
+}
 
 /* Plain sets×reps: 4x8, 4×8-12, 3 sets of 10, 3x45s, 4 sets.
    First number < 20 (a plausible set count). */
@@ -359,12 +365,14 @@ function parseSetTokens(seg) {
   }
   found.sort((a, b) => a.idx - b.idx);
   /* per-set intensity: an intensity word between this set token and the next belongs to this set */
-  return found.map((t, i) => {
+  const out = found.map((t, i) => {
     const tail = seg.slice(t.end, i + 1 < found.length ? found[i + 1].idx : seg.length);
     let int_ = null;
     for (const w of INTENSITY_WORDS) if (w.rx.test(tail)) { int_ = w.key; break; }
     return int_ ? { weight: t.weight, reps: t.reps, intensity: int_ } : { weight: t.weight, reps: t.reps };
   });
+  out.firstIdx = found.length ? found[0].idx : -1;
+  return out;
 }
 
 function parseWeight(seg) {
@@ -422,7 +430,7 @@ function parseSession(text, customLib) {
     const sr = parseSetsReps(seg);
     const ex = matchExercise(seg, customLib);
     if (ex) {
-      const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: detectIntensity(seg), raw: seg };
+      const base = { name: ex.name, primary: ex.p, secondary: ex.s, intensity: segIntensity(seg, tokens), raw: seg };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) base.bw = true;
       if (ex.hold) base.hold = true;
       if (ex.ecc || eccOf(seg, !!(sr && (sr.dur || sr.dist)))) base.ecc = true;
@@ -479,7 +487,7 @@ function parseSession(text, customLib) {
     } else if (sr || tokens.length || (/\b(iso(metric)?|hold)\b/i.test(seg) && timeList(seg).length)) {
       const item = { raw: seg, sets: sr ? sr.sets : tokens.length, reps: sr ? sr.reps : tokens.map(t=>t.reps).join("/"),
         weight: tokens.length ? maxWeight(tokens) : parseWeight(seg),
-        setDetail: tokens.length ? tokens : undefined, intensity: detectIntensity(seg) };
+        setDetail: tokens.length ? tokens : undefined, intensity: segIntensity(seg, tokens) };
       if (/\b(bw|body\s?weight|bodyweight)\b/i.test(seg)) item.bw = true;
       if (eccOf(seg, false)) item.ecc = true;
       if (powOf(seg)) item.pow = true;
