@@ -830,7 +830,8 @@ function workoutView(){
   if (progDay == null) progDay = sug;
   const day = p.days[progDay] || p.days[0];
   const acts = actsGet();
-  const dayChips = p.days.map((d,i)=>`<button style="flex:1;padding:8px 4px;border-radius:10px;font-size:12px;position:relative;${i===progDay?"background:var(--steel);color:#fff;border:1px solid var(--steel)":"background:var(--panel);color:var(--muted);border:1px solid var(--line)"}" data-pd="${i}">${esc(d.label.split("—")[0].trim())}${i===sug?`<div style="font-size:9px;color:${i===progDay?"#cfe0f2":"var(--steel)"}">up next</div>`:""}</button>`).join("");
+  const dayChips = p.days.length === 1 ? "" : p.days.map((d,i)=>`<button style="flex:1;padding:8px 4px;border-radius:10px;font-size:12px;position:relative;${i===progDay?"background:var(--steel);color:#fff;border:1px solid var(--steel)":"background:var(--panel);color:var(--muted);border:1px solid var(--line)"}" data-pd="${i}">${esc(d.label.split("—")[0].trim())}${i===sug?`<div style="font-size:9px;color:${i===progDay?"#cfe0f2":"var(--steel)"}">up next</div>`:""}</button>`).join("");
+  const dayBar = dayChips ? `<div style="display:flex;gap:6px;margin-bottom:10px">${dayChips}</div>` : "";
   const cards = day.items.map((it,ii)=>{
     const skipped = !!progSkip[ii];
     const prev = acts[it.name] || null;
@@ -849,7 +850,7 @@ function workoutView(){
         <span style="color:var(--dim);font-size:11px;width:34px">set ${si+1}</span>
         <input type="number" inputmode="decimal" id="w-${ii}-${si}" value="${pw}" placeholder="${t2.w??"lbs"}" style="width:72px;margin:0">
         <span style="color:var(--dim)">×</span>
-        <input type="number" inputmode="numeric" id="r-${ii}-${si}" value="${pr}" placeholder="${t2.r??"reps"}" style="width:64px;margin:0">
+        <input type="number" inputmode="numeric" id="r-${ii}-${si}" value="${pr}" placeholder="${t2.r??"reps"}" style="width:72px;margin:0">
         <select id="e-${ii}-${si}" style="width:86px;margin:0;background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:${sel?"var(--text)":"var(--dim)"};font-size:11px;padding:8px 4px">
           <option value="" ${sel?"":"selected"}>↳ ${(EFFORTS.find(e2=>e2[0]===(t2.i||defEff))||["","solid"])[1]}</option>
           ${EFFORTS.map(([k,l])=>`<option value="${k}" ${sel===k?"selected":""}>${l}</option>`).join("")}
@@ -860,16 +861,19 @@ function workoutView(){
       ${progExpanded[ii]?`<ol style="margin:6px 0 0;padding-left:18px;font-size:12px;color:var(--muted);line-height:1.6">${it.cues.map(cu=>`<li>${esc(cu)}</li>`).join("")}</ol>
         ${it.mistakes&&it.mistakes.length?`<div style="font-size:11px;color:#e0c48a;margin-top:6px;font-weight:700">Watch out for:</div><ul style="margin:2px 0 0;padding-left:18px;font-size:11px;color:var(--muted);line-height:1.6">${it.mistakes.map(mm=>`<li>${esc(mm)}</li>`).join("")}</ul>`:""}`:""}
     </div>` : "";
+    const restSecs = (function(){ if (!it.rest) return 0; const m = String(it.rest).match(/(\d+)/); if (!m) return 0;
+      let s2 = +m[1]; if (/min/i.test(it.rest)) s2 *= 60; return (s2 >= 10 && s2 <= 600) ? s2 : 0; })();
+    const restBtn = (!skipped && restSecs) ? `<button id="rt-${ii}" data-rt="${ii}:${restSecs}" style="width:100%;margin-top:8px;padding:9px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);color:var(--muted);font-size:13px;font-weight:700">⏱ Start rest timer (${restSecs}s)</button>` : "";
     const effSeg = skipped ? "" : `<div style="display:flex;gap:6px;margin-top:8px">${EFFORTS.map(([k,l])=>`<button data-eff="${ii}:${k}" style="flex:1;padding:6px 2px;border-radius:9px;font-size:11px;${(progEff[ii]||it.ti||"moderate")===k?"background:var(--steel);color:#fff;border:1px solid var(--steel)":"background:var(--panel2);color:var(--muted);border:1px solid var(--line)"}">${l}</button>`).join("")}</div>`;
     return `<div class="card" style="${skipped?"opacity:.55":""}">
-      <div style="display:flex;align-items:baseline;gap:8px"><h1 style="font-size:15px;margin:0" class="grow">${esc(it.name)}</h1>
+      <div style="display:flex;align-items:baseline;gap:8px"><h1 style="font-size:15px;margin:0;flex:1;min-width:0">${esc(it.name)}</h1>
         <button style="background:none;border:none;color:${skipped?"var(--steel)":"var(--dim)"};font-size:11px;cursor:pointer" data-skip="${ii}">${skipped?"un-skip":"skip"}</button></div>
       <div class="sub" style="margin-top:2px">${tline}</div>
       ${it.note?`<div style="font-size:11px;color:var(--dim)">${esc(it.note)}</div>`:""}
-      ${rows}${effSeg}${howto}
+      ${rows}${effSeg}${restBtn}${howto}
     </div>`;
   }).join("");
-  return `<div style="display:flex;gap:6px;margin-bottom:10px">${dayChips}</div>
+  return `${dayBar}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div style="font-size:13px;font-weight:700;color:var(--ice)">${esc(day.label)}</div>
       <a href="${worker}/program?c=${encodeURIComponent(client)}&t=${encodeURIComponent(token)}" target="_blank" style="font-size:12px;color:var(--steel);text-decoration:none">Full program ↗</a></div>
@@ -877,6 +881,27 @@ function workoutView(){
     <div class="card"><label>Date</label><input type="date" id="woDate" value="${todayISO()}">
       <button class="btn" id="woSend" style="margin-top:10px">Send workout to coach</button>
       <div class="muted" style="margin-top:8px">Weights are pre-filled from last time — just fix what changed. Did something outside the plan (pickup game, buddy workout)? Log it in the <b>Log</b> tab so your recovery stays accurate.</div></div>`;
+}
+let _rtInt = null;
+function startRest(ii, secs){
+  if (_rtInt) clearInterval(_rtInt);
+  let left = secs;
+  const tick = () => {
+    const btn = app.querySelector("#rt-" + ii);
+    if (!btn){ clearInterval(_rtInt); _rtInt = null; return; }
+    if (left <= 0){
+      clearInterval(_rtInt); _rtInt = null;
+      btn.textContent = "✓ Rest done — next set";
+      btn.style.color = "#8fd0a8"; btn.style.borderColor = "#8fd0a866";
+      if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+      return;
+    }
+    btn.textContent = "⏱ " + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0") + " — resting";
+    btn.style.color = "var(--ice)";
+    left--;
+  };
+  tick();
+  _rtInt = setInterval(tick, 1000);
 }
 let progEff = {}; /* per-exercise default effort */
 let progSetEff = {}; /* per-set effort override "ex:set" -> intensity */
@@ -935,9 +960,9 @@ function progressView(){
   const recov = (me.recovery||[]).filter(r=>r.whoop!=null).slice(-14);
   return `
   <div class="card"><h1>Your last 30 days</h1>
-    <div class="sub" style="margin-top:6px"><b style="color:var(--ice)">${last30.length}</b> sessions logged${lastS?` · last: ${esc(lastS.title)} on ${fmtD(lastS.date)}`:""}${me.pay&&me.pay.type==="pack"?` · training pack with your coach`:""}</div>
+    <div class="sub" style="margin-top:6px"><b style="color:var(--ice)">${last30.length}</b> session${last30.length===1?"":"s"} logged${lastS?` · last: ${esc(lastS.title)} on ${fmtD(lastS.date)}`:""}${me.pay&&me.pay.type==="pack"?` · training pack with your coach`:""}</div>
   </div>
-  ${names.length?`<div class="card"><h1>Lift progress</h1><div class="sub" style="margin-bottom:10px">Your strongest set each session — direction matters more than any single day.</div>${names.map(n=>miniChart(n, series[n])).join("")}</div>`:""}
+  ${names.length?`<div class="card"><h1>Lift progress</h1><div class="sub" style="margin-bottom:10px">Your strongest set each session — direction matters more than any single day.</div>${names.map(n=>miniChart(n, series[n])).join("")}</div>`:`<div class="card"><h1>Lift progress</h1><div class="sub">Your charts build themselves — after a few logged sessions, every lift gets its own progress line here.</div></div>`}
   ${prs.length?`<div class="card"><h1>Personal records</h1>${prs.map(p=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)"><span>${esc(p.exercise)}</span><b style="color:var(--ice)">${p.bw?`${p.reps} reps`:p.hold?`${p.secs}s hold`:`${p.weight} lbs`}</b></div>`).join("")}</div>`:""}
   ${(me.dexa||[]).length?(function(){
     const dx = me.dexa, last = dx[dx.length-1], prev = dx.length>1?dx[dx.length-2]:null;
@@ -979,6 +1004,8 @@ function render(){
     return;
   }
   const t = (app.querySelector("#t")||{}).value || "";
+  const dispName = (me && me.name) || "";
+  const pageHeader = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span>${dispName?`<span style="color:var(--dim);font-weight:400"> · ${esc(dispName)}</span>`:""}</div></header>`;
   const hasProg = me && me.program && me.program.days && me.program.days.length;
   const tabBtn = (k, label, id) => `<button style="flex:1;padding:10px 4px;border-radius:11px;font-size:13px;${tab===k?"background:var(--steel);color:#fff":"background:var(--panel);color:var(--muted);border:1px solid var(--line)"}" id="${id}">${label}</button>`;
   const tabs = `<div style="display:flex;gap:8px;margin-bottom:12px">
@@ -992,25 +1019,26 @@ function render(){
   };
   if (tab === "workout"){
     const _miss = pendingMiss();
-    app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}${_miss?missCard(_miss):(schedCard()+workoutView())}`;
+    app.innerHTML = `${pageHeader}${tabs}${_miss?missCard(_miss):(schedCard()+workoutView())}`;
     wireTabs(); wireSched();
     app.querySelectorAll("[data-pd]").forEach(b=>b.addEventListener("click", ()=>{ progDay = +b.dataset.pd; progSkip = {}; progEff = {}; render(); }));
     app.querySelectorAll("[data-how]").forEach(b=>b.addEventListener("click", ()=>{ const k=+b.dataset.how; progExpanded[k]=!progExpanded[k]; render(); }));
     app.querySelectorAll("[data-skip]").forEach(b=>b.addEventListener("click", ()=>{ const k=+b.dataset.skip; progSkip[k]=!progSkip[k]; if(!progSkip[k])delete progSkip[k]; render(); }));
     app.querySelectorAll("[data-eff]").forEach(b=>b.addEventListener("click", ()=>{ const [k,v]=b.dataset.eff.split(":"); progEff[+k]=v; render(); }));
+    app.querySelectorAll("[data-rt]").forEach(b=>b.addEventListener("click", ()=>{ const [k,s2]=b.dataset.rt.split(":"); startRest(+k, +s2); }));
     app.querySelectorAll("select[id^='e-']").forEach(s2=>s2.addEventListener("change", ()=>{ const [,a,b2]=s2.id.split("-"); if (s2.value) progSetEff[a+":"+b2]=s2.value; else delete progSetEff[a+":"+b2]; }));
     const ws = app.querySelector("#woSend"); if (ws) ws.addEventListener("click", sendWorkout);
     const wa = app.querySelector("#woAgain"); if (wa) wa.addEventListener("click", ()=>{ progSent=false; progSkip={}; progEff={}; progDay=null; render(); });
     return;
   }
   if (tab === "progress"){
-    app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}${progressView()}`;
+    app.innerHTML = `${pageHeader}${tabs}${progressView()}`;
     wireTabs();
     return;
   }
-  app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}
+  app.innerHTML = `${pageHeader}${tabs}
     <div class="card"><h1>Log a solo workout</h1>
-      <div class="sub">${esc(client)} — type what you did in plain English. Sets, reps, weight, and how hard it felt all help.</div>
+      <div class="sub">${esc(dispName || client)} — type what you did in plain English. Sets, reps, weight, and how hard it felt all help.</div>
       <label>Your workout</label>
       <textarea id="t" placeholder="e.g. bench press 4x8 at 185 heavy, incline db press 3x10, cable flies 3x15, tricep pushdowns 4x12">${esc(t)}</textarea>
       <div id="prev"></div>
@@ -1023,7 +1051,7 @@ function render(){
     ${photoCard()}
     ${painCard()}
     ${moveCard()}`;
-  { const _m2 = pendingMiss(); if (_m2){ app.innerHTML = `<header>${crescent}<div class="word"><b>Dwil</b> <span>Fitness</span></div></header>${tabs}` + missCard(_m2); wireTabs(); wireSched(); return; } }
+  { const _m2 = pendingMiss(); if (_m2){ app.innerHTML = `${pageHeader}${tabs}` + missCard(_m2); wireTabs(); wireSched(); return; } }
   app.innerHTML += schedCard();
   wireTabs(); wireSched();
   const ta = app.querySelector("#t");
