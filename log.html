@@ -560,6 +560,109 @@ const Engine = {
 if (typeof module !== "undefined") module.exports = Engine;
 if (typeof window !== "undefined") window.Engine = Engine;
 
+/* ============================================================
+   Spotter Recovery / Readiness model — evidence-aligned
+   Grounded in: HRV(RMSSD) deviation from personal rolling baseline is the
+   top marker (Plews/Buchheit; WHOOP weighting); RHR inverse & less sensitive;
+   sleep loss ~7.5% perf hit, 1-2 night recovery; 3-7 day trend > single reading;
+   subjective wellness adds independent signal.
+   ============================================================ */
+(function(root){
+  const clamp = (x,lo,hi) => Math.max(lo, Math.min(hi, x));
+  const mean = a => a.reduce((s,v)=>s+v,0)/a.length;
+  const sd = a => { const m=mean(a); return Math.sqrt(mean(a.map(v=>(v-m)*(v-m)))); };
+
+  /* rolling baseline from prior entries for a metric key (last N, need >=3) */
+  function baseline(entries, key, N=14){
+    const vals = entries.map(e=>e[key]).filter(v=>v!=null && !isNaN(v)).slice(-N);
+    if (vals.length < 3) return null;
+    const m = mean(vals);
+    return { mean: m, sd: Math.max(sd(vals), Math.abs(m)*0.05, 1e-6), n: vals.length };
+  }
+
+  /* signed contribution in [-1,1]; 0 = at baseline. 1.5 SD swing = full scale. */
+  function zContribution(x, base, invert=false){
+    if (base == null || x == null) return null;
+    let z = (x - base.mean) / base.sd;
+    if (invert) z = -z;                 // RHR: lower is better
+    return clamp(z / 1.5, -1, 1);
+  }
+
+  function sleepContribution(h, q, need=8){
+    let parts = [], w = [];
+    if (h != null){ parts.push(clamp((h - need)/2, -1, 0.4)); w.push(0.7); }
+    if (q != null){ parts.push(clamp((q - 3)/2, -1, 1));      w.push(0.3); }
+    if (!parts.length) return null;
+    const tw = w.reduce((s,v)=>s+v,0);
+    return parts.reduce((s,v,i)=>s+v*w[i],0) / tw;
+  }
+  const feelContribution = f => f==null ? null : clamp((f-3)/2, -1, 1);
+
+  const WEIGHTS = { hrv: 0.40, rhr: 0.18, sleep: 0.27, feel: 0.15 };
+
+  /* Map baseline-neutral raw[-1,1] to 0-100 with asymmetry:
+     at baseline -> 70 (solidly ready); bad days fall faster than good days rise. */
+  function rawToScore(raw){
+    return clamp(Math.round(70 + (raw >= 0 ? 30*raw : 65*raw)), 1, 100);
+  }
+
+  /* today's entry = latest; prior entries build the baseline.
+     sysLoad = current systemic-fatigue score (0-10) from the training model. */
+  function readiness(entries, sysLoad=0){
+    if (!entries || !entries.length) return null;
+    const sorted = [...entries].sort((a,b)=>a.date.localeCompare(b.date));
+    const today = sorted[sorted.length-1];
+    const prior = sorted.slice(0, -1);
+
+    const comps = {
+      hrv:  zContribution(today.hrv,  baseline(prior,"hrv"),  false),
+      rhr:  zContribution(today.rhr,  baseline(prior,"rhr"),  true),
+      sleep: sleepContribution(today.sleepH, today.sleepQ),
+      feel: feelContribution(today.feel),
+    };
+
+    let score, usedWhoop = false;
+    if (today.whoop != null){
+      usedWhoop = true;                          // any device readiness score (WHOOP/Oura/Garmin/Fitbit) = spine
+      score = today.whoop;
+    } else {
+      let num=0, den=0;
+      for (const k in WEIGHTS) if (comps[k]!=null){ num += WEIGHTS[k]*comps[k]; den += WEIGHTS[k]; }
+      score = den ? rawToScore(num/den) : null;  // no inputs -> unknown
+    }
+    if (score == null) return { score:null, band:"unknown", comps, usedWhoop, hasData:false };
+
+    /* systemic pressure the wearable can't see from a manual score:
+       apply lightly, and less when a device HRV/whoop is present (avoids double count). */
+    const sysPenalty = clamp((sysLoad - 4) * 2.5, 0, 18);
+    const damp = (usedWhoop || comps.hrv != null) ? 0.35 : 1.0;
+    score = clamp(Math.round(score - sysPenalty * damp), 1, 100);
+
+    const band = score >= 67 ? "green" : score >= 34 ? "yellow" : "red";
+    return { score, band, comps, usedWhoop, sysPenalty: Math.round(sysPenalty*damp), hasData:true };
+  }
+
+  /* Recovery couples back into muscle-fatigue decay:
+     low readiness slows recovery, high speeds it (bounded).
+     effective_decay = base_decay ^ factor, factor<1 => retains more => slower recovery. */
+  function recoveryFactor(score){
+    if (score == null) return 1.0;
+    return clamp(score / 70, 0.62, 1.32);
+  }
+
+  /* steps -> extra systemic load (external daily activity the gym log misses).
+     ~8k steps baseline neutral; each additional 4k ≈ +0.4 systemic, capped. */
+  function stepSys(steps){
+    if (steps == null) return 0;
+    return clamp((steps - 8000) / 4000 * 0.4, 0, 1.2);
+  }
+
+  const Recovery = { baseline, zContribution, sleepContribution, feelContribution,
+    readiness, recoveryFactor, stepSys, rawToScore, WEIGHTS };
+  if (typeof module !== "undefined") module.exports = Recovery;
+  if (root) root.Recovery = Recovery;
+})(typeof window !== "undefined" ? window : null);
+
 </script>
 <script>
 "use strict";
@@ -867,7 +970,7 @@ function workoutView(){
     const effSeg = skipped ? "" : `<div style="display:flex;gap:6px;margin-top:8px">${EFFORTS.map(([k,l])=>`<button data-eff="${ii}:${k}" style="flex:1;padding:6px 2px;border-radius:9px;font-size:11px;${(progEff[ii]||it.ti||"moderate")===k?"background:var(--steel);color:#fff;border:1px solid var(--steel)":"background:var(--panel2);color:var(--muted);border:1px solid var(--line)"}">${l}</button>`).join("")}</div>`;
     return `<div class="card" style="${skipped?"opacity:.55":""}">
       <div style="display:flex;align-items:baseline;gap:8px"><h1 style="font-size:15px;margin:0;flex:1;min-width:0">${esc(it.name)}</h1>
-        <button style="background:none;border:none;color:${skipped?"var(--steel)":"var(--dim)"};font-size:11px;cursor:pointer" data-skip="${ii}">${skipped?"un-skip":"skip"}</button></div>
+        <button style="background:none;border:none;color:${skipped?"var(--steel)":"var(--dim)"};font-size:11px;cursor:pointer;width:auto;flex:0 0 auto;padding:0" data-skip="${ii}">${skipped?"un-skip":"skip"}</button></div>
       <div class="sub" style="margin-top:2px">${tline}</div>
       ${it.note?`<div style="font-size:11px;color:var(--dim)">${esc(it.note)}</div>`:""}
       ${rows}${effSeg}${restBtn}${howto}
