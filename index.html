@@ -790,6 +790,13 @@ let S;
 try { S = JSON.parse(store.getItem(LS_KEY)) || seedState(); }
 catch(e){ S = seedState(); }
 let _backupBusy = false;
+/* merge-sync: deterministic session identity + tombstones (must match worker) */
+function sessHash(s){
+  const str = (s.date||"")+"|"+(s.title||"")+"|"+JSON.stringify(s.exercises||s.text||"");
+  let h = 0; for (let i = 0; i < str.length; i++) h = (h*31 + str.charCodeAt(i)) | 0;
+  return "h" + (h>>>0).toString(36);
+}
+function tombSess(c, s){ if (!s) return; (c.delSess = c.delSess || {})[sessHash(s)] = Date.now(); }
 function save(){ store.setItem(LS_KEY, JSON.stringify(S)); autoBackup(); }
 save();
 
@@ -2402,7 +2409,7 @@ function dexaMenu(c){
   wrap.addEventListener("click", ev => {
     if (ev.target === wrap || ev.target.id === "dxClose"){ wrap.remove(); return; }
     const del = ev.target.closest("[data-dxdel]");
-    if (del){ appConfirm("Delete this scan?", () => { c.dexa = (c.dexa || []).filter(s => s.date !== del.dataset.dxdel); save(); autoBackup(true); wrap.remove(); render(); dexaMenu(c); }, { yes: "Delete", danger: true }); return; }
+    if (del){ appConfirm("Delete this scan?", () => { (c.delDexa = c.delDexa || {})[del.dataset.dxdel] = Date.now(); c.dexa = (c.dexa || []).filter(s => s.date !== del.dataset.dxdel); save(); autoBackup(true); wrap.remove(); render(); dexaMenu(c); }, { yes: "Delete", danger: true }); return; }
     if (ev.target.id === "dxAdd"){
       const bf = parseFloat(wrap.querySelector("#dxBf").value);
       if (isNaN(bf) || bf <= 0 || bf >= 70){ toast("Enter the body fat % from the report"); return; }
@@ -2426,6 +2433,7 @@ function deleteChartEntry(c, name, date, k, alsoSession){
   const hits = findChartEntries(c, name, date);
   const h = hits[k||0]; if (!h) return false;
   const s = c.sessions[h.si];
+  tombSess(c, s); /* old content-hash dies either way (edit = new hash) */
   s.exercises.splice(h.xi, 1);
   if (!s.exercises.length || alsoSession) c.sessions.splice(h.si, 1);
   rebuildClient(c); save();
@@ -3252,7 +3260,7 @@ function programMenu(c){
   document.body.appendChild(wrap);
   wrap.addEventListener("click", ev=>{
     if (ev.target===wrap || ev.target.id==="pgClose"){ wrap.remove(); return; }
-    if (ev.target.id==="pgRemove"){ wrap.remove(); appConfirm(`Remove ${c.name}'s program? Their link goes back to freeform logging.`, ()=>{ delete c.program; save(); autoBackup(true); render(); toast("Program removed"); }, {yes:"Remove", danger:true}); return; }
+    if (ev.target.id==="pgRemove"){ wrap.remove(); appConfirm(`Remove ${c.name}'s program? Their link goes back to freeform logging.`, ()=>{ delete c.program; c.delProg = Date.now(); save(); autoBackup(true); render(); toast("Program removed"); }, {yes:"Remove", danger:true}); return; }
     if (ev.target.id==="pgTargets"){ wrap.remove(); programTargets(c); return; }
     if (ev.target.id==="pgImport"){
       const html = wrap.querySelector("#pgPaste").value;
@@ -3396,7 +3404,8 @@ function clientMenu(){
     if (ev.target.id==="cmRename"){ wrap.remove(); appPrompt("New name:", c.name, n=>{ if (n.trim()){ c.name=n.trim(); save(); render(); } }); }
     if (ev.target.id==="cmLogLink"){ const l = clientLogLink(c); if (l){ if (navigator.clipboard) navigator.clipboard.writeText(l).then(()=>toast("Solo-log link copied — text it to "+c.name)).catch(()=>appCopy("Send this to "+c.name+":", l)); else appCopy("Send this to "+c.name+":", l); } wrap.remove(); }
     if (ev.target.id==="cmDelete"){ wrap.remove(); appConfirm(`Delete ${c.name} and ALL their data? This cannot be undone. Export a backup first if unsure.`, ()=>{
-      S.clients = S.clients.filter(x=>x.id!==c.id); save(); view={page:"roster",clientId:null,tab:"brief"}; render(); toast("Client deleted"); }, {yes:"Delete", danger:true}); }
+      (S.delClients = S.delClients || {})[c.id] = Date.now();
+      S.clients = S.clients.filter(x=>x.id!==c.id); save(); autoBackup(true); view={page:"roster",clientId:null,tab:"brief"}; render(); toast("Client deleted"); }, {yes:"Delete", danger:true}); }
   });
 }
 
@@ -3566,13 +3575,13 @@ function rejectSub(idx){
     const sid=s.id; pendingSubs=pendingSubs.filter(x=>x!==s); ackSub(sid); render(); toast("Rejected"); }, {yes:"Reject", danger:true});
 }
 
-function autoBackup(force){
+function autoBackup(force, mode){
   if (!S.syncUrl || !S.syncKey || _backupBusy) return;
   if (S.syncPending){ if (force) toast("Auto-backup is paused — resolve the cloud/device choice in ⛭ first"); return; }
   const last = +(store.getItem("dwil-backup-ts")||0);
   if (!force && Date.now() - last < 20*3600*1000) return;
   _backupBusy = true;
-  fetch(`${S.syncUrl.replace(/\/+$/,"")}/backup?key=${encodeURIComponent(S.syncKey)}`, {
+  fetch(`${S.syncUrl.replace(/\/+$/,"")}/backup?key=${encodeURIComponent(S.syncKey)}${mode==="replace"?"&mode=replace":""}`, {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ saved: new Date().toISOString(), state: S })
   }).then(r=>r.json()).then(d=>{
@@ -3580,6 +3589,37 @@ function autoBackup(force){
     if (d && d.ok){ store.setItem("dwil-backup-ts", String(Date.now())); if (force) toast("Cloud backup saved"); }
     else if (force) toast("Backup failed: " + ((d&&d.error)||"unknown"));
   }).catch(()=>{ _backupBusy = false; if (force) toast("Backup failed — network"); });
+}
+function strHash(x){ let h = 0; const s = JSON.stringify(x)||""; for (let i = 0; i < s.length; i++) h = (h*31 + s.charCodeAt(i)) | 0; return h; }
+/* boot sync: every open pushes this device through the server-side MERGE, then pulls
+   the combined result. Both devices converge; nobody clobbers anybody. */
+function bootSync(){
+  if (!S.syncUrl || !S.syncKey || S.syncPending) return;
+  const base = S.syncUrl.replace(/\/+$/,"");
+  _backupBusy = true;
+  fetch(`${base}/backup?key=${encodeURIComponent(S.syncKey)}`, { method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ saved: new Date().toISOString(), state: S }) })
+  .then(r=>r.json())
+  .then(d=>{
+    _backupBusy = false;
+    if (!d || !d.ok) return null;
+    store.setItem("dwil-backup-ts", String(Date.now()));
+    return fetch(`${base}/backup?key=${encodeURIComponent(S.syncKey)}`).then(r=>r.json());
+  })
+  .then(d=>{
+    if (!d || d.error || !d.state || !Array.isArray(d.state.clients)) return;
+    if (strHash(d.state.clients) === strHash(S.clients)
+      && strHash(d.state.customExercises||[]) === strHash(S.customExercises||[])) return;
+    const keepUrl = S.syncUrl, keepKey = S.syncKey;
+    S = d.state; S.syncUrl = keepUrl; S.syncKey = keepKey; delete S.syncPending;
+    for (const c of S.clients){ try { rebuildClient(c); } catch(e){} }
+    store.setItem(LS_KEY, JSON.stringify(S));
+    store.setItem("dwil-backup-ts", String(Date.now()));
+    render();
+    toast("Synced — merged the latest data from your other device");
+  })
+  .catch(()=>{ _backupBusy = false; });
 }
 function adoptCloudState(d){
   const keepUrl = S.syncUrl, keepKey = S.syncKey;
@@ -3639,7 +3679,7 @@ function syncChoiceModal(d){
     if (ev.target.id==="scUse"){ wrap.remove(); adoptCloudState(d); toast(`Cloud data loaded — this device is now in sync (${n} clients)`); return; }
     if (ev.target.id==="scPush"){ wrap.remove();
       appConfirm(`Really replace the cloud backup (${n} clients, ${when}) with this device's ${localN} client${localN===1?"":"s"}? Your other device would then be out of date.`, ()=>{
-        delete S.syncPending; save(); syncExLib(); autoBackup(true);
+        delete S.syncPending; save(); syncExLib(); autoBackup(true, "replace");
       }, {yes:"Overwrite cloud", danger:true}); return; }
   });
 }
@@ -3904,12 +3944,12 @@ function bind(){
       if (s && s.exercises){
         draft = s.exercises.map(x=>{ const m=exMuscles(x.name); return { ...x, primary:m.p, secondary:m.s }; });
         draftDate = s.date; draftTitle = s.title || "";
-        c.sessions.splice(+ds.editsess,1); rebuildClient(c); save();
+        tombSess(c, c.sessions[+ds.editsess]); c.sessions.splice(+ds.editsess,1); rebuildClient(c); save();
         view.tab = "log"; render(); toast("Session loaded into the draft — fix it and save");
       } }
     else if (ds.delsess!==undefined && ds.delsess!==""){ const c=client();
       appConfirm("Delete this session? Fatigue and PRs will be recalculated.", ()=>{
-        c.sessions.splice(+ds.delsess,1); rebuildClient(c); save(); render(); toast("Session deleted"); }, {yes:"Delete", danger:true}); }
+        tombSess(c, c.sessions[+ds.delsess]); c.sessions.splice(+ds.delsess,1); rebuildClient(c); save(); render(); toast("Session deleted"); }, {yes:"Delete", danger:true}); }
     else if (ds.bm){ const [m,v]=ds.bm.split(":"); toast(`${m}: ${v} / 10`); }
     else if (ds.tab){ view.tab=ds.tab; render(); }
     else if (ds.duoside){ duoActive = ds.duoside; render(); }
@@ -4058,6 +4098,7 @@ function bind(){
 
 restoreDraft();
 render();
+try { bootSync(); } catch(e){}
 
 </script>
 <script>

@@ -14,6 +14,9 @@
      Scopes: read:recovery read:sleep read:cycles read:profile offline
    ============================================================ */
 
+/* v13: POST /backup now MERGES with the stored state (sessions/dexa/recovery/etc
+   union with tombstones; existing tokens kept; newest program wins) unless
+   ?mode=replace. A stale device can no longer clobber the cloud.
 /* v7: + /video endpoints — R2 bucket binding VIDEOS required.
    Movement-quality videos: upload (client token or trainer key), Range-aware
    playback, per-movement milestone retention (baseline + pinned + latest 4). */
@@ -57,6 +60,77 @@ async function whoopGet(access, path) {
   const res = await fetch(WHOOP_API + path, { headers: { Authorization: "Bearer " + access } });
   if (!res.ok) throw new Error("whoop api " + path + " -> " + res.status);
   return res.json();
+}
+
+/* ---- merge-sync (v13): combine an incoming device state with the cloud state so
+   a stale device can never erase newer work. last-writer-wins is gone. ---- */
+function sessHash(s){
+  const str = (s.date||"")+"|"+(s.title||"")+"|"+JSON.stringify(s.exercises||s.text||"");
+  let h = 0; for (let i = 0; i < str.length; i++) h = (h*31 + str.charCodeAt(i)) | 0;
+  return "h" + (h>>>0).toString(36);
+}
+function unionBy(a, b, keyFn, tomb){
+  const out = [], seen = new Set();
+  for (const arr of [a||[], b||[]]) for (const x of arr){
+    const k = keyFn(x);
+    if (seen.has(k)) continue;
+    if (tomb && tomb[k]) continue;
+    seen.add(k); out.push(x);
+  }
+  return out;
+}
+function byDate(a,b){ return String(a.date||"") < String(b.date||"") ? -1 : 1; }
+function mergeInjury(inc, ex){
+  if (!ex) return inc;
+  const m = Object.assign({}, ex, inc);
+  m.checkIns = unionBy(inc.checkIns, ex.checkIns, x=>x.date+"|"+x.pain).sort(byDate);
+  m.cnotes = unionBy(inc.cnotes, ex.cnotes, x=>(x.date||"")+"|"+(x.text||x.note||""));
+  const tests = new Map();
+  for (const arr of [ex.tests||[], inc.tests||[]]) for (const t of arr){
+    const cur = tests.get(t.name);
+    if (!cur) tests.set(t.name, Object.assign({}, t, { entries: (t.entries||[]).slice() }));
+    else cur.entries = unionBy(t.entries, cur.entries, x=>x.date+"|"+x.v).sort(byDate);
+  }
+  m.tests = [...tests.values()];
+  if (inc.status==="cleared" || ex.status==="cleared") m.status = "cleared";
+  m.redFlags = unionBy(inc.redFlags, ex.redFlags, x=>String(x));
+  return m;
+}
+function mergeClient(inc, ex){
+  if (!ex) return inc;
+  if (!inc) return ex;
+  const m = Object.assign({}, ex, inc);
+  for (const k of Object.keys(m)) if (m[k] === undefined) delete m[k];
+  if (ex.token) m.token = ex.token; /* links already texted keep working */
+  m.delSess = Object.assign({}, ex.delSess, inc.delSess);
+  m.delDexa = Object.assign({}, ex.delDexa, inc.delDexa);
+  const delProg = Math.max(inc.delProg||0, ex.delProg||0);
+  if (delProg) m.delProg = delProg; else delete m.delProg;
+  m.sessions = unionBy(inc.sessions, ex.sessions, s=>s.sid||sessHash(s), m.delSess).sort(byDate);
+  m.dexa = unionBy(inc.dexa, ex.dexa, d=>d.date, m.delDexa).sort(byDate);
+  m.recovery = unionBy(inc.recovery, ex.recovery, r=>r.date).sort(byDate);
+  m.photoLog = unionBy(inc.photoLog, ex.photoLog, p=>p.date||String(p)).sort();
+  m.moveChecks = unionBy(inc.moveChecks, ex.moveChecks, v=>v.id||v.vkey||((v.date||"")+"|"+(v.mv||"")));
+  const injMap = new Map((ex.injuries||[]).map(i=>[i.id, i]));
+  m.injuries = (inc.injuries||[]).map(i=>mergeInjury(i, injMap.get(i.id)));
+  for (const i of ex.injuries||[]) if (!(inc.injuries||[]).some(x=>x.id===i.id)) m.injuries.push(i);
+  const progs = [inc.program, ex.program].filter(Boolean)
+    .sort((a,b)=>String(b.assigned||"").localeCompare(String(a.assigned||"")));
+  if (progs.length) m.program = progs[0]; else delete m.program;
+  if (m.program && m.delProg && m.delProg > (Date.parse(m.program.assigned||0)||0) + 86400000) delete m.program;
+  return m;
+}
+function mergeStates(inc, ex){
+  if (!ex || !Array.isArray(ex.clients)) return inc;
+  const out = Object.assign({}, ex, inc);
+  out.delClients = Object.assign({}, ex.delClients, inc.delClients);
+  const exMap = new Map((ex.clients||[]).map(c=>[c.id, c]));
+  const clients = (inc.clients||[]).map(c=>mergeClient(c, exMap.get(c.id)));
+  for (const c of ex.clients||[]) if (!(inc.clients||[]).some(x=>x.id===c.id)) clients.push(c);
+  out.clients = clients.filter(c=>!(out.delClients && out.delClients[c.id]));
+  out.customExercises = unionBy(inc.customExercises, ex.customExercises, e=>String(e.name||"").toLowerCase());
+  out.mergedAt = Date.now();
+  return out;
 }
 
 async function getState(env) {
@@ -398,7 +472,12 @@ export default {
         if (!body || !body.state || !Array.isArray(body.state.clients)) return cors(env, JSON.stringify({ error: "no state" }), 400);
         const prev = await env.TOKENS.get("backup:latest");
         if (prev) await env.TOKENS.put("backup:prev", prev);
-        const payload = JSON.stringify({ saved: body.saved || new Date().toISOString(), state: body.state });
+        let outState = body.state;
+        const replace = url.searchParams.get("mode") === "replace";
+        if (!replace && prev){
+          try { outState = mergeStates(body.state, JSON.parse(prev).state); } catch { outState = body.state; }
+        }
+        const payload = JSON.stringify({ saved: new Date().toISOString(), state: outState });
         await env.TOKENS.put("backup:latest", payload);
         /* weekly slot: extra restore point that only advances every 7+ days */
         try {
@@ -406,7 +485,7 @@ export default {
           const wkSaved = wk ? new Date(JSON.parse(wk).saved) : null;
           if (!wkSaved || (Date.now() - wkSaved) > 7 * 86400000) await env.TOKENS.put("backup:week", payload);
         } catch {}
-        return cors(env, JSON.stringify({ ok: true }));
+        return cors(env, JSON.stringify({ ok: true, merged: !replace && !!prev }));
       }
       if (url.pathname === "/backup") {
         if (!env.APP_KEY || url.searchParams.get("key") !== env.APP_KEY) return cors(env, JSON.stringify({ error: "bad key" }), 403);
