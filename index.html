@@ -227,9 +227,9 @@ const EXERCISE_LIBRARY = [
   { name: "Cable Rotation", aliases: ["cable rotation","cable rotations","pallof press"], p: ["core"], s: [] },
   { name: "Shoulder Taps", aliases: ["shoulder taps","shoulder tap"], p: ["core"], s: ["front-delts"] },
   { name: "Rope Machine Pull", aliases: ["rope machine pull","rope machine pulls","rope pulls"], p: ["lats"], s: ["biceps","forearms-grip","core"] },
-  { name: "Conditioning", aliases: ["conditioning","field day","lateral slides","skipping","hops"], p: ["calves"], s: ["quads","hamstrings","core"], sys: 1.6 },
+  { name: "Conditioning", aliases: ["conditioning","field day","lateral slides","skipping"], p: ["calves"], s: ["quads","hamstrings","core"], sys: 1.6 },
   { name: "Running", aliases: ["ran", "run","running","jog","jogging","treadmill run","treadmill"], p: ["quads","calves"], s: ["hamstrings","glutes","core"], sys: 1.6 },
-  { name: "Sprints", aliases: ["sprint","sprints","build-up sprints","hill sprints"], p: ["hamstrings","glutes"], s: ["quads","calves","core"], sys: 1.6 },
+  { name: "Sprints", aliases: ["sprint","sprints","build-up sprints"], p: ["hamstrings","glutes"], s: ["quads","calves","core"], sys: 1.6 },
   { name: "Bike", aliases: ["bike","cycling","spin bike","stationary bike"], p: ["quads"], s: ["glutes","hamstrings","calves"], sys: 1.6 },
   { name: "Assault Bike", aliases: ["assault bike","air bike","echo bike"], p: ["quads"], s: ["biceps","triceps","calves","core"], sys: 1.6 },
   { name: "Rowing", aliases: ["rowing","row erg","erg","rower"], p: ["mid-back","quads"], s: ["lats","hamstrings","biceps","core","forearms-grip"], sys: 1.6 },
@@ -237,9 +237,36 @@ const EXERCISE_LIBRARY = [
   { name: "Box Jumps", aliases: ["box jump","box jumps"], p: ["quads","glutes"], s: ["calves","hamstrings","core"], sys: 1.3 },
   { name: "Power Clean", aliases: ["power clean","power cleans","hang clean","hang cleans","clean pull","clean pulls"], p: ["glutes","hamstrings"], s: ["quads","mid-back","forearms-grip","core"], sys: 1.4, pow: true },
   { name: "Kettlebell Swing", aliases: ["kettlebell swing","kettlebell swings","kb swing","kb swings"], p: ["glutes","hamstrings"], s: ["low-back","core","forearms-grip"], sys: 1.3, pow: true },
+  /* ---- field-day drills (v2p) — referenced by exact name from field mode ---- */
+  { name: "A-Skip", aliases: ["a-skip","a skips"], p: ["calves"], s: ["quads","core"], sys: 1.05 },
+  { name: "B-Skip", aliases: ["b-skip","b skips"], p: ["hamstrings","calves"], s: ["quads","core"], sys: 1.05 },
+  { name: "Power Skip", aliases: ["power skip","power skips"], p: ["calves","glutes"], s: ["quads","core"], sys: 1.15 },
+  { name: "High Knees", aliases: ["high knees","high-knees"], p: ["quads","calves"], s: ["core"], sys: 1.1 },
+  { name: "Butt Kicks", aliases: ["butt kicks","butt kickers"], p: ["hamstrings","calves"], s: [], sys: 1.05 },
+  { name: "Karaoke", aliases: ["karaoke","carioca"], p: ["adductors","abductors"], s: ["calves","core"], sys: 1.05 },
+  { name: "Acceleration", aliases: ["acceleration","accelerations","accels"], p: ["glutes","quads"], s: ["hamstrings","calves","core"], sys: 1.7 },
+  { name: "Flying Sprint", aliases: ["flying sprint","flying sprints","flying 10","flying 20","fly sprint"], p: ["hamstrings","glutes"], s: ["quads","calves","core"], sys: 1.8 },
+  { name: "Tempo Run", aliases: ["tempo run","tempo runs","tempos"], p: ["quads","hamstrings"], s: ["glutes","calves","core"], sys: 1.4 },
+  { name: "Hill Sprint", aliases: ["hill sprint","hill sprints"], p: ["glutes","quads"], s: ["hamstrings","calves","core"], sys: 1.7 },
+  { name: "Backpedal", aliases: ["backpedal","backpedals","backwards run"], p: ["quads"], s: ["glutes","calves"], sys: 1.3 },
+  { name: "Shuttle Run", aliases: ["shuttle run","shuttles","suicides"], p: ["quads","glutes"], s: ["hamstrings","calves","adductors","core"], sys: 1.6 },
+  { name: "Bounds", aliases: ["bound","bounding","alternating bounds"], p: ["glutes","hamstrings"], s: ["quads","calves","core"], sys: 1.4, ecc: true },
+  { name: "Single-Leg Bounds", aliases: ["single-leg bounds","single leg bounds","sl bounds"], p: ["glutes","hamstrings"], s: ["quads","calves","core"], sys: 1.4, ecc: true },
+  { name: "Vertical Jump", aliases: ["vertical jump","vertical jumps","vert jumps"], p: ["quads","glutes"], s: ["calves","core"], sys: 1.3 },
+  { name: "Hurdle Hops", aliases: ["hurdle hop","hurdle hops"], p: ["quads","calves"], s: ["glutes","core"], sys: 1.35, ecc: true },
+  { name: "Single-Leg Hops", aliases: ["single-leg hops","single leg hop","single leg hops","sl hops"], p: ["calves","quads"], s: ["glutes","core"], sys: 1.3, ecc: true },
+  { name: "Pogo Hops", aliases: ["pogo","pogo jump","ankle hops"], p: ["calves"], s: ["quads"], sys: 1.2 },
+  { name: "Pro Agility", aliases: ["pro agility","5-10-5","five ten five"], p: ["quads","glutes"], s: ["adductors","abductors","calves","hamstrings","core"], sys: 1.6 },
+  { name: "Cone Drill", aliases: ["cone drill","cone drills","l drill","3 cone"], p: ["quads","glutes"], s: ["adductors","abductors","calves","core"], sys: 1.5 },
+  { name: "Lateral Shuffle", aliases: ["lateral shuffle","defensive slides","side shuffle"], p: ["abductors","adductors"], s: ["quads","glutes","calves"], sys: 1.3 },
+  { name: "Curved Run", aliases: ["curved run","curve run","arc run"], p: ["glutes","quads"], s: ["hamstrings","calves","adductors"], sys: 1.5 },
+  { name: "MB Overhead Throw", aliases: ["overhead throw","med ball overhead throw","mb overhead"], p: ["core","front-delts"], s: ["lats","triceps","glutes"], sys: 1.2, pow: true },
+  { name: "MB Chest Pass", aliases: ["chest pass","med ball chest pass","mb chest pass"], p: ["chest","triceps"], s: ["core","front-delts"], sys: 1.15, pow: true },
+  { name: "MB Rotational Throw", aliases: ["rotational throw","rotational throws","med ball rotational","scoop toss"], p: ["core"], s: ["glutes","adductors","abductors"], sys: 1.2, pow: true },
+  { name: "MB Slam", aliases: ["ball slam","ball slams","med ball slam","slams"], p: ["core","lats"], s: ["front-delts","triceps"], sys: 1.25, pow: true },
   { name: "Broad Jumps", aliases: ["broad jump","broad jumps","standing long jump"], p: ["quads","glutes"], s: ["calves","hamstrings","core"], sys: 1.3 },
   { name: "Lateral Bounds", aliases: ["lateral bound","lateral bounds","skater jumps","skaters"], p: ["glutes","abductors"], s: ["quads","calves","adductors"], sys: 1.3 },
-  { name: "Depth Jumps", aliases: ["depth jump","depth jumps","pogo hops","pogos"], p: ["calves","quads"], s: ["glutes","core"], sys: 1.3 },
+  { name: "Depth Jumps", aliases: ["depth jump","depth jumps"], p: ["calves","quads"], s: ["glutes","core"], sys: 1.3 },
   { name: "Burpees", aliases: ["burpee","burpees"], p: ["quads","chest"], s: ["core","front-delts","triceps","calves"], sys: 1.6 },
   { name: "Sled Push", aliases: ["sled push","sled pushes","prowler"], p: ["quads","glutes"], s: ["calves","core"], sys: 1.6 },
   { name: "Sled Pull", aliases: ["sled pull","sled pulls","sled drag"], p: ["hamstrings","glutes"], s: ["mid-back","forearms-grip","core"], sys: 1.6 },
@@ -815,15 +842,165 @@ function activeDraft(){ return (duoPartnerId && duoActive==="b") ? duoDraftB : d
 function activeDraftClient(){ return (duoPartnerId && duoActive==="b") ? duoPartner() : client(); }
 function resetDuo(){ duoPartnerId = null; duoDraftB = []; duoActive = "a"; }
 
+/* ================= FIELD DAY MODE (Stage 1) =================
+   Trainer-only. Yards default. Separate draft, drill cards, weighted
+   foot-contact + hard-plant meters phase-gated per injury. */
+let fieldMode = false, fieldDraft = [];
+const FIELD_DRILLS = [
+  /* cat: skip|sprint|plyo|sled|cut|throw ; cw: contact weight (0=uncounted);
+     alt: alternating legs; sl: single-leg (side pick); pp: hard plants/rep;
+     time: best-time field; jump: distance-measured; sy: counts sprint yards */
+  { k:"askip",   name:"A-Skip",              cat:"skip",   yds:20, reps:3,  eff:60 },
+  { k:"bskip",   name:"B-Skip",              cat:"skip",   yds:20, reps:3,  eff:60 },
+  { k:"pskip",   name:"Power Skip",          cat:"skip",   yds:20, reps:3,  eff:75 },
+  { k:"hknees",  name:"High Knees",          cat:"skip",   yds:20, reps:2,  eff:70 },
+  { k:"bkicks",  name:"Butt Kicks",          cat:"skip",   yds:20, reps:2,  eff:60 },
+  { k:"karaoke", name:"Karaoke",             cat:"skip",   yds:20, reps:2,  eff:60 },
+  { k:"sprint",  name:"Sprints",             cat:"sprint", yds:40, reps:4,  eff:95, time:true, sy:true },
+  { k:"accel",   name:"Acceleration",        cat:"sprint", yds:20, reps:4,  eff:90, time:true, sy:true },
+  { k:"fly",     name:"Flying Sprint",       cat:"sprint", yds:20, reps:3,  eff:95, time:true, sy:true },
+  { k:"tempo",   name:"Tempo Run",           cat:"sprint", yds:100,reps:4,  eff:70, time:true, sy:true },
+  { k:"hill",    name:"Hill Sprint",         cat:"sprint", yds:30, reps:5,  eff:90, time:true, sy:true },
+  { k:"backped", name:"Backpedal",           cat:"sprint", yds:20, reps:3,  eff:70 },
+  { k:"shuttle", name:"Shuttle Run",         cat:"sprint", yds:60, reps:3,  eff:85, time:true, sy:true },
+  { k:"bounds",  name:"Bounds",              cat:"plyo",   reps:20, eff:85, cw:1.5, alt:true },
+  { k:"slbound", name:"Single-Leg Bounds",   cat:"plyo",   reps:10, eff:85, cw:2,   sl:true },
+  { k:"broad",   name:"Broad Jumps",         cat:"plyo",   reps:5,  eff:90, cw:1.5, jump:"ft" },
+  { k:"vert",    name:"Vertical Jump",       cat:"plyo",   reps:5,  eff:90, cw:1,   jump:"in" },
+  { k:"box",     name:"Box Jumps",           cat:"plyo",   reps:8,  eff:85, cw:1.5 },
+  { k:"depth",   name:"Depth Jumps",         cat:"plyo",   reps:6,  eff:90, cw:2 },
+  { k:"hurdle",  name:"Hurdle Hops",         cat:"plyo",   reps:8,  eff:85, cw:2 },
+  { k:"slhop",   name:"Single-Leg Hops",     cat:"plyo",   reps:8,  eff:80, cw:2,   sl:true },
+  { k:"pogo",    name:"Pogo Hops",           cat:"plyo",   reps:20, eff:70, cw:1 },
+  { k:"latb",    name:"Lateral Bounds",      cat:"plyo",   reps:10, eff:85, cw:1.5, alt:true },
+  { k:"sledp",   name:"Sled Push",           cat:"sled",   yds:20, reps:4,  eff:85, w:true },
+  { k:"sledd",   name:"Sled Pull",           cat:"sled",   yds:20, reps:4,  eff:85, w:true },
+  { k:"proag",   name:"Pro Agility",         cat:"cut",    reps:4,  eff:90, pp:2, time:true },
+  { k:"cone",    name:"Cone Drill",          cat:"cut",    reps:4,  eff:90, pp:3, time:true },
+  { k:"cuts",    name:"Curved Run",          cat:"cut",    yds:30, reps:4, eff:85 },
+  { k:"shuffle", name:"Lateral Shuffle",     cat:"cut",    yds:10, reps:4, eff:75 },
+  { k:"mbover",  name:"MB Overhead Throw",   cat:"throw",  reps:6,  eff:90 },
+  { k:"mbchest", name:"MB Chest Pass",       cat:"throw",  reps:8,  eff:85 },
+  { k:"mbrot",   name:"MB Rotational Throw", cat:"throw",  reps:8,  eff:85 },
+  { k:"mbslam",  name:"MB Slam",             cat:"throw",  reps:10, eff:85 },
+];
+const fieldDrill = k => FIELD_DRILLS.find(d=>d.k===k);
+function fieldEffIntensity(eff){ return eff>=90 ? "max" : eff>=75 ? "heavy" : eff>=55 ? "moderate" : "warmup"; }
+function fieldMph(yds, secs){ return (yds>0 && secs>0) ? Math.round(yds*0.9144/secs*2.23694*10)/10 : null; }
+
+/* weighted foot contacts per leg {L,R} + hard plants {L,R} for one field item */
+function fieldContacts(it){
+  const d = fieldDrill(it.k); if (!d) return null;
+  const reps = +it.reps || 0;
+  const out = { L:0, R:0, pL:0, pR:0 };
+  if (d.cw && reps){
+    const w = reps * d.cw;
+    if (d.sl){
+      if (it.side === "L") out.L = w;
+      else if (it.side === "R") out.R = w;
+      else { out.L = w; out.R = w; } /* "both" = reps per leg */
+    } else { out.L = w/2; out.R = w/2; }
+  }
+  if (d.pp && reps){ const p = reps * d.pp; out.pL = p/2; out.pR = p/2; }
+  return out;
+}
+function fieldSessionLoad(items){
+  const t = { L:0, R:0, pL:0, pR:0, runYds:0, topMph:null };
+  for (const it of items){
+    const d = fieldDrill(it.k); if (!d) continue;
+    const c2 = fieldContacts(it);
+    if (c2){ t.L+=c2.L; t.R+=c2.R; t.pL+=c2.pL; t.pR+=c2.pR; }
+    if (d.sy) t.runYds += (+it.reps||0) * (+it.yds||0);
+    if (d.time && it.best){ const m = fieldMph(+it.yds||0, +it.best); if (m && (!t.topMph || m>t.topMph)) t.topMph = m; }
+  }
+  for (const k2 of ["L","R","pL","pR"]) t[k2] = Math.round(t[k2]*10)/10;
+  return t;
+}
+/* this week's already-LOGGED field load (excludes the live draft) */
+function weekFieldLoad(c, dateISO){
+  const ref = dateISO || todayISO();
+  const cutoff = localISO(new Date(new Date(ref+"T00:00:00").getTime() - 6*86400000));
+  const t = { L:0, R:0, pL:0, pR:0, runYds:0 };
+  for (const s of (c.sessions||[])){
+    if (s.date < cutoff || s.date > ref || !s.exercises) continue;
+    for (const x of s.exercises){
+      if (!x.fd) continue;
+      const c2 = fieldContacts(x.fd);
+      if (c2){ t.L+=c2.L; t.R+=c2.R; t.pL+=c2.pL; t.pR+=c2.pR; }
+      const d = fieldDrill(x.fd.k);
+      if (d && d.sy) t.runYds += (+x.fd.reps||0)*(+x.fd.yds||0);
+    }
+  }
+  for (const k2 of ["L","R","pL","pR"]) t[k2] = Math.round(t[k2]*10)/10;
+  return t;
+}
+
+/* built-in field-load profiles — 4 phases each; reference ranges, never gates.
+   Anchors: NSCA plyometric volume guidance + published return-to-sport progressions. */
+const FIELD_HI_MIN = [0, 40, 70, 90];
+const FIELD_PHASES = ["Early","Mid","Late","Return"];
+const FIELD_PROFILES = [
+  { key:"acl", label:"ACL", match:/\bacl\b|anterior cruciate/i, minDays:[0,90,180,270],
+    contacts:[[10,25],[25,45],[45,80],[80,120]], week:[[20,50],[50,90],[90,160],[160,250]],
+    plants:["none","none","intro","open"], sprint:[0,60,80,95],
+    note:"deceleration & plants are the risk — stage them last" },
+  { key:"patellar", label:"Patellar tendon", match:/patellar|jumper|patellar tendinopathy|patella/i, minDays:[0,14,42,90],
+    contacts:[[10,25],[25,50],[50,85],[85,120]], week:[[20,50],[50,100],[100,170],[170,250]],
+    plants:["none","intro","intro","open"], sprint:[60,75,90,100],
+    note:"energy-storage work is the medicine AND the poison — 48h+ between plyo days" },
+  { key:"hamstring", label:"Hamstring", match:/hamstring|hammy/i, minDays:[0,10,21,42],
+    contacts:[[30,55],[55,80],[80,110],[110,140]], week:[[60,110],[110,160],[160,220],[220,280]],
+    plants:["intro","intro","open","open"], sprint:[50,70,85,100],
+    note:"sprint VELOCITY is the risk parameter, not contacts" },
+  { key:"achilles", label:"Achilles", match:/achilles/i, minDays:[0,21,56,112],
+    contacts:[[10,20],[20,45],[45,80],[80,115]], week:[[15,40],[40,90],[90,160],[160,230]],
+    plants:["none","intro","open","open"], sprint:[55,70,85,100],
+    note:"calf stiffness work therapeutic mid-phase — hills & flys last, 48-72h spacing" },
+  { key:"ankle", label:"Ankle sprain", match:/ankle|atfl|inversion sprain/i, minDays:[0,7,21,42],
+    contacts:[[15,30],[30,55],[55,90],[90,130]], week:[[30,60],[60,110],[110,180],[180,260]],
+    plants:["none","intro","open","open"], sprint:[60,75,90,100],
+    note:"lateral work (cuts, lateral bounds) is the risk — straight-line opens first" },
+];
+const FIELD_LOWER = new Set(["quads","hamstrings","glutes","calves","adductors","abductors","low-back"]);
+function fieldProfileFor(inj){
+  const hay = ((inj.label||"") + " " + (inj.type||"")).toLowerCase();
+  return FIELD_PROFILES.find(p=>p.match.test(hay)) || null;
+}
+/* phase-gated status for every relevant active injury + a healthy fallback band */
+function fieldStatusFor(c, dateISO){
+  const ref = dateISO || todayISO();
+  const out = [];
+  for (const inj of (c.injuries||[])){
+    if (inj.status === "cleared") continue;
+    const lower = (inj.muscles||[]).some(m=>FIELD_LOWER.has(m));
+    const prof = fieldProfileFor(inj);
+    if (!lower && !prof) continue;
+    const p = prof || FIELD_PROFILES[4]; /* unknown lower-limb -> ankle-ish conservative */
+    const days = Math.max(0, Math.round((new Date(ref) - new Date(inj.onset)) / 86400000));
+    const ai = aiAssessFor(c, inj);
+    const hi = ai ? ai.score : (healingIndex(c, inj)||{}).score || 0;
+    let phase = 0;
+    for (let i = 3; i >= 0; i--){ if (days >= p.minDays[i] && hi >= FIELD_HI_MIN[i]){ phase = i; break; } }
+    out.push({ inj, prof: p, phase, days, hi, side: inj.side || null,
+      contacts: p.contacts[phase], week: p.week[phase], plants: p.plants[phase], sprint: p.sprint[phase],
+      generic: !prof });
+  }
+  return out;
+}
+function fieldHealthyBand(c){
+  const yrs = c.trainStart ? (Date.now() - new Date(c.trainStart+"-01")) / 3.15576e10 : 0;
+  return yrs >= 7 ? [110,140] : yrs >= 2 ? [80,110] : [60,80];
+}
+
 /* crash-proof drafts: every change is written to storage instantly and restored on relaunch */
 const DRAFT_KEY = "dwil-spotter-draft";
 let draftText = "";
 function persistDraft(){
   try {
-    if (draft.length || duoDraftB.length || draftText.trim()){
+    if (draft.length || duoDraftB.length || draftText.trim() || fieldDraft.length){
       store.setItem(DRAFT_KEY, JSON.stringify({
         clientId: view && view.clientId, draft, duoPartnerId, duoDraftB, duoActive,
-        draftDate, draftTitle, draftText, savedAt: Date.now() }));
+        draftDate, draftTitle, draftText, fieldMode, fieldDraft, savedAt: Date.now() }));
     } else store.removeItem(DRAFT_KEY);
   } catch(e){}
 }
@@ -831,12 +1008,13 @@ function restoreDraft(){
   try {
     const raw = store.getItem(DRAFT_KEY); if (!raw) return;
     const d = JSON.parse(raw);
-    if (!d || (!(d.draft||[]).length && !(d.duoDraftB||[]).length && !(d.draftText||"").trim())) return;
+    if (!d || (!(d.draft||[]).length && !(d.duoDraftB||[]).length && !(d.draftText||"").trim() && !(d.fieldDraft||[]).length)) return;
     const c = S.clients.find(x=>x.id===d.clientId); if (!c) { store.removeItem(DRAFT_KEY); return; }
     draft = d.draft||[]; duoDraftB = d.duoDraftB||[]; duoActive = d.duoActive||"a";
     duoPartnerId = (d.duoPartnerId && S.clients.some(x=>x.id===d.duoPartnerId)) ? d.duoPartnerId : null;
     if (!duoPartnerId) { duoDraftB = []; duoActive = "a"; }
     draftDate = d.draftDate||todayISO(); draftTitle = d.draftTitle||""; draftText = d.draftText||"";
+    fieldMode = !!d.fieldMode; fieldDraft = d.fieldDraft||[];
     view = { page:"client", clientId: c.id, tab:"log" };
     setTimeout(()=>toast(`Unsaved session for ${c.name} restored — nothing was lost`), 600);
   } catch(e){}
@@ -1676,7 +1854,7 @@ function weeklyVolume(c){
   for (const s of c.sessions){
     if (!s.exercises || s.date < cutoff) continue;
     for (const x of s.exercises){
-      if (x.dur || x.dist || x.bouts) continue; /* cardio & sports: minutes aren't hypertrophy sets */
+      if (x.dur || x.dist || x.bouts || x.field) continue; /* cardio, sports & field days aren't hypertrophy sets */
       let n;
       if (x.setDetail && x.setDetail.length)
         n = x.setDetail.filter(sd => (sd.intensity ?? x.intensity) !== "warmup").length; /* working sets only */
@@ -1840,6 +2018,95 @@ function draftItemHtml(it, i){
   </div>`;
 }
 
+/* field drill card + meters */
+function fieldCtxOf(c, it){
+  const d = fieldDrill(it.k); if (!d || (!d.time && !d.jump)) return "";
+  let last=null, best=null;
+  for (const s of (c.sessions||[])) for (const x of (s.exercises||[])){
+    if (!x.fd || x.fd.k!==it.k) continue;
+    if (d.time){ if (+x.fd.yds !== +it.yds || !x.fd.best) continue;
+      const v = +x.fd.best; const e = {date:s.date, v};
+      if (!last || s.date >= last.date) last = e;
+      if (!best || v < best.v) best = e;
+    } else if (d.jump && x.fd.bestft){
+      const v = +x.fd.bestft; const e = {date:s.date, v};
+      if (!last || s.date >= last.date) last = e;
+      if (!best || v > best.v) best = e;
+    }
+  }
+  if (!last) return "";
+  const u = d.time ? "s" : " " + (d.jump||"ft");
+  const dd = iso => new Date(iso+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
+  if (best && best.date===last.date && best.v===last.v)
+    return `<div class="d-ctx">Last &amp; best (${dd(last.date)}): <b>${last.v}${u}</b></div>`;
+  return `<div class="d-ctx">Last (${dd(last.date)}): <b>${last.v}${u}</b> &nbsp;—&nbsp; Best: <b>${best.v}${u}</b> (${dd(best.date)})</div>`;
+}
+function fieldItemHtml(it, i){
+  const d = fieldDrill(it.k) || {};
+  const c = client();
+  const num = (k2, val, lbl, w2) => `<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:10px;color:var(--dim)">${lbl}</span><input type="number" inputmode="decimal" data-fda="${i}:${k2}" value="${val==null?"":val}" style="width:${w2||62}px"></div>`;
+  const effSel = `<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:10px;color:var(--dim)">effort</span><select data-fda="${i}:eff" style="width:70px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:var(--text);padding:8px 4px">${[50,60,70,75,80,85,90,95,100].map(v=>`<option value="${v}" ${+it.eff===v?"selected":""}>${v}%</option>`).join("")}</select></div>`;
+  const cc = fieldContacts(it);
+  const badges = [d.cat, d.cw?`×${d.cw} contacts`:null, d.pp?`${d.pp} plants/rep`:null].filter(Boolean)
+    .map(b=>`<span style="font-size:10px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 7px">${b}</span>`).join(" ");
+  const sideChips = d.sl ? `<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:10px;color:var(--dim)">leg</span><div class="ichips" style="margin:0">${["both","L","R"].map(sd=>`<span class="ichip ${(it.side||"both")===sd?"on":""}" data-fdside="${i}:${sd}">${sd}</span>`).join("")}</div></div>` : "";
+  return `<div class="draft-item">
+    <div class="row"><div class="grow">
+      <div class="d-name">${esc(d.name||it.k)}</div>
+      <div style="margin:2px 0 4px">${badges}</div>
+      ${fieldCtxOf(c, it)}
+    </div><button class="btn-x" data-fddel="${i}">✕</button></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:6px">
+      ${num("reps", it.reps, "reps")}
+      ${d.yds!==undefined?num("yds", it.yds, "yds each"):""}
+      ${effSel}
+      ${d.w?num("w", it.w, "sled lbs"):""}
+      ${d.time?num("best", it.best, "best (s)", 70):""}
+      ${d.jump?num("bestft", it.bestft, "best ("+d.jump+")", 70):""}
+      ${sideChips}
+      ${cc && (cc.L+cc.R)>0?`<span style="font-size:11px;color:var(--dim);padding-bottom:9px">${Math.round((cc.L+cc.R)*10)/10} wtd contacts</span>`:""}
+      ${cc && (cc.pL+cc.pR)>0?`<span style="font-size:11px;color:#e0c48a;padding-bottom:9px">${Math.round(cc.pL+cc.pR)} plants</span>`:""}
+    </div>
+  </div>`;
+}
+function fieldMeterHtml(c){
+  const draftLoad = fieldSessionLoad(fieldDraft);
+  const wk = weekFieldLoad(c, draftDate || todayISO());
+  const statuses = fieldStatusFor(c, draftDate || todayISO());
+  const bar = (v, lo, hi) => {
+    const pos = hi>0 ? Math.min(1.25, v/hi) : 0;
+    const col = v > hi ? "#e0a86a" : v >= lo ? "var(--ok, #6fbf8f)" : "var(--dim)";
+    const word = v > hi ? "over the reference — your call" : v >= hi*0.85 ? "approaching the top" : v >= lo ? "good place" : "room to work";
+    return `<div style="height:7px;border-radius:4px;background:var(--panel2);overflow:hidden;margin:3px 0"><div style="height:100%;width:${Math.round(Math.min(100,pos*100))}%;background:${col}"></div></div><span style="font-size:10px;color:${col}">${word}</span>`;
+  };
+  const legLine = (leg, v, wkv, st) => {
+    const tot = Math.round((v + wkv)*10)/10;
+    return `<div style="margin-top:8px"><b style="font-size:12px">${leg} leg:</b> <span style="font-size:12px">${Math.round(v*10)/10} wtd contacts this session</span>
+      <span style="font-size:11px;color:var(--dim)"> · session range ${st.contacts[0]}–${st.contacts[1]} · week ${tot} / ${st.week[0]}–${st.week[1]}</span>
+      ${bar(v, st.contacts[0], st.contacts[1])}</div>`;
+  };
+  let inner = "";
+  for (const st of statuses){
+    const why = `${st.prof.label}${st.generic?" (generic lower-limb)":""} — ${FIELD_PHASES[st.phase]} phase · HI ${st.hi} · day ${st.days}`;
+    const plants = draftLoad.pL + draftLoad.pR + wk.pL + wk.pR;
+    const plantLine = `<div style="font-size:11px;margin-top:4px;color:${st.plants==="none"&&plants>0?"#e0a86a":"var(--dim)"}">plants: ${st.plants==="none"?"none suggested this phase":st.plants==="intro"?"intro — sub-max angle/speed":"open"}${plants?` · ${Math.round(plants)} in draft+week`:""} · sprints ≤${st.sprint}% effort</div>`;
+    if (st.side){
+      const v = st.side==="L" ? draftLoad.L : draftLoad.R;
+      const wv = st.side==="L" ? wk.L : wk.R;
+      inner += `<div style="border-top:1px solid var(--line);padding-top:6px;margin-top:8px"><div style="font-size:11px;color:var(--ice)">${esc(why)}</div>${legLine(st.side, v, wv, st)}${plantLine}${st.prof.note?`<div style="font-size:10px;color:var(--dim);margin-top:3px">${esc(st.prof.note)}</div>`:""}</div>`;
+    } else {
+      inner += `<div style="border-top:1px solid var(--line);padding-top:6px;margin-top:8px"><div style="font-size:11px;color:var(--ice)">${esc(why)}</div>${legLine("L", draftLoad.L, wk.L, st)}${legLine("R", draftLoad.R, wk.R, st)}${plantLine}${st.prof.note?`<div style="font-size:10px;color:var(--dim);margin-top:3px">${esc(st.prof.note)}</div>`:""}</div>`;
+    }
+  }
+  if (!statuses.length){
+    const band = fieldHealthyBand(c);
+    const v = draftLoad.L + draftLoad.R;
+    inner = `<div style="font-size:11px;color:var(--dim);margin-top:4px">healthy reference (training age): ${band[0]}–${band[1]} wtd contacts/session</div>
+      <div style="font-size:12px;margin-top:4px">${Math.round(v*10)/10} wtd contacts (L ${draftLoad.L} / R ${draftLoad.R})${(draftLoad.pL+draftLoad.pR)?` · ${Math.round(draftLoad.pL+draftLoad.pR)} hard plants`:""}</div>${bar(v, band[0], band[1])}`;
+  }
+  const head = `<b style="font-size:13px">Field load</b> <span style="font-size:11px;color:var(--dim)">· ${draftLoad.runYds} run yds${draftLoad.topMph?` · top ${draftLoad.topMph} mph`:""} · reference ranges, never a gate</span>`;
+  return `<div class="card" style="margin-top:10px">${head}${inner}</div>`;
+}
 function tabLog(c){
   const p = duoPartner();
   const ad = activeDraft();
@@ -1854,7 +2121,23 @@ function tabLog(c){
       <span class="ichip ${duoActive==="b"?"on":""}" data-duoside="b">${esc(p.name)}</span>
     </div>
     <div class="muted" style="margin-bottom:8px;font-size:11px">One dictation, two profiles. Tap a name, adjust their weights/sets — removals apply only to them. Injury flags follow whoever you are editing.</div>` : "";
-  return `<div class="card">
+    const modeChips = `<div class="ichips" style="margin:0 0 10px"><span class="ichip ${!fieldMode?"on":""}" data-fieldtoggle="off">\ud83c\udfcb Gym</span><span class="ichip ${fieldMode?"on":""}" data-fieldtoggle="on">\ud83c\udfc3 Field day</span></div>`;
+  if (fieldMode){
+    const cards = fieldDraft.map((it,i2)=>fieldItemHtml(it,i2)).join("");
+    return `<div class="card">${modeChips}
+      <div class="minirow"><select id="fdsel" style="flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:var(--text);font-size:13px;padding:9px">
+        ${FIELD_DRILLS.map(d=>`<option value="${d.k}">${esc(d.name)} (${d.cat})</option>`).join("")}
+      </select><button class="btn-sm" data-fdadd="1">+ Add drill</button></div>
+      <div class="muted" style="font-size:10px;margin-top:6px">Yards default \u00b7 best time only where you hand-timed \u00b7 contacts &amp; plants count live below.</div>
+    </div>
+    ${cards ? `<h2 style="margin:14px 0 6px">Field draft</h2>${cards}` : `<div class="empty">No drills yet \u2014 add from the list above.</div>`}
+    ${fieldDraft.length ? fieldMeterHtml(c) : ""}
+    ${fieldDraft.length ? `<div class="card" style="margin-top:10px">
+      <div class="minirow"><span class="lbl">Session date</span><input type="date" id="sessdate" value="${draftDate}"></div>
+      <div class="minirow"><input type="text" id="sesstitle" value="${esc(draftTitle)}" placeholder="Session title (default: Field day)"></div>
+      <button class="btn" style="margin-top:10px" data-act="save-field">Save field day \u2192 update fatigue</button></div>` : ""}`;
+  }
+  return `<div class="card">${modeChips}
     <textarea id="logtext" placeholder="e.g. bench press 135x10, 155x8, 185x6 heavy — or back squats 4x6 at 185">${esc(draftText)}</textarea>
     <div class="row" style="gap:8px;margin-top:10px">
       <button class="btn2 grow" data-act="parse">Parse text</button>
@@ -1869,6 +2152,14 @@ function tabLog(c){
 }
 
 function fmtExercise(x){
+  if (x.fd){ const d = fieldDrill(x.fd.k)||{}; const f = x.fd;
+    let s2 = `${x.name} ${f.reps||"?"}${f.yds?`×${f.yds}yd`:" reps"} @${f.eff||"?"}%`;
+    if (f.w) s2 += ` +${f.w} lb`;
+    if (f.best){ const m = fieldMph(+f.yds||0, +f.best); s2 += ` · best ${f.best}s${m?` (${m} mph)`:""}`; }
+    if (f.bestft) s2 += ` · best ${f.bestft} ${d.jump||"ft"}`;
+    if (d.sl && f.side && f.side!=="both") s2 += ` · ${f.side} only`;
+    return s2;
+  }
   const _e = (x.ecc ? " · negatives" : "") + (x.pow ? " · power" : "");
   if (x.band) return `${x.name} ${x.sets}×${x.reps||"?"} @ ${x.band==="band"?"band":x.band+" band"} (${x.intensity})${_e}`;
   if (x.hold && x.setDetail && x.setDetail.length) return `${x.name} holds ${x.setDetail.map(s=>s.reps).join(", ")} (${x.intensity})${_e}`;
@@ -2575,10 +2866,67 @@ function buildChartCards(c){
   }).join("");
 }
 
+function fieldChartCard(c){
+  /* aggregate field history: best/last time per drill+distance (lower better), jump distances, weekly load */
+  const rows = new Map(); /* key k|yds -> {d, yds, pts:[{date,v}]} */
+  const jumps = new Map();
+  const weeks = new Map(); /* mondayISO -> {yds, wtd, plants} */
+  let any = false;
+  for (const s of (c.sessions||[])){
+    for (const x of (s.exercises||[])){
+      if (!x.fd) continue; any = true;
+      const d = fieldDrill(x.fd.k); if (!d) continue;
+      if (d.time && x.fd.best){
+        const key = x.fd.k+"|"+(x.fd.yds||0);
+        if (!rows.has(key)) rows.set(key, { d, yds: x.fd.yds||0, pts: [] });
+        rows.get(key).pts.push({ date: s.date, v: +x.fd.best });
+      }
+      if (d.jump && x.fd.bestft){
+        if (!jumps.has(x.fd.k)) jumps.set(x.fd.k, { d, pts: [] });
+        jumps.get(x.fd.k).pts.push({ date: s.date, v: +x.fd.bestft });
+      }
+      const mon = (()=>{ const dt = new Date(s.date+"T00:00:00"); const day=(dt.getDay()+6)%7; dt.setDate(dt.getDate()-day); return localISO(dt); })();
+      if (!weeks.has(mon)) weeks.set(mon, { yds:0, wtd:0, plants:0 });
+      const w2 = weeks.get(mon);
+      const cc = fieldContacts(x.fd);
+      if (cc){ w2.wtd += cc.L+cc.R; w2.plants += cc.pL+cc.pR; }
+      if (d.sy) w2.yds += (+x.fd.reps||0)*(+x.fd.yds||0);
+    }
+  }
+  if (!any) return "";
+  const dd = iso => new Date(iso+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
+  const timeRows = [...rows.values()].map(r=>{
+    r.pts.sort((a,b)=>a.date.localeCompare(b.date));
+    const last = r.pts[r.pts.length-1];
+    const best = r.pts.reduce((m,p)=>p.v<m.v?p:m, r.pts[0]);
+    const first = r.pts[0];
+    const delta = Math.round((last.v-first.v)*100)/100;
+    const mph = fieldMph(r.yds, best.v);
+    return `<div class="minirow" style="justify-content:space-between"><span style="font-size:13px"><b>${esc(r.d.name)}</b> ${r.yds}yd</span>
+      <span style="font-size:12px;color:var(--muted)">last ${last.v}s · best <b style="color:var(--ice)">${best.v}s</b> (${dd(best.date)}${mph?` · ${mph} mph`:""})${r.pts.length>1?` <span style="color:${delta<=0?"#8fd4a8":"#e0a86a"}">${delta<=0?"":"+"}${delta}s</span>`:""}</span></div>`;
+  }).join("");
+  const jumpRows = [...jumps.values()].map(r=>{
+    r.pts.sort((a,b)=>a.date.localeCompare(b.date));
+    const last = r.pts[r.pts.length-1];
+    const best = r.pts.reduce((m,p)=>p.v>m.v?p:m, r.pts[0]);
+    return `<div class="minirow" style="justify-content:space-between"><span style="font-size:13px"><b>${esc(r.d.name)}</b></span>
+      <span style="font-size:12px;color:var(--muted)">last ${last.v}${r.d.jump} · best <b style="color:var(--ice)">${best.v}${r.d.jump}</b> (${dd(best.date)})</span></div>`;
+  }).join("");
+  const wk = [...weeks.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(-6);
+  const maxY = Math.max(1, ...wk.map(([,v])=>v.yds));
+  const wkBars = wk.map(([mon,v])=>`<div class="minirow" style="gap:8px"><span style="font-size:10px;color:var(--dim);flex:0 0 46px">${dd(mon)}</span>
+    <div style="flex:1;height:9px;border-radius:4px;background:var(--panel2);overflow:hidden"><div style="height:100%;width:${Math.round(100*v.yds/maxY)}%;background:var(--steel)"></div></div>
+    <span style="font-size:10px;color:var(--muted);flex:0 0 150px;text-align:right">${Math.round(v.yds)} yds · ${Math.round(v.wtd)} contacts${v.plants?` · ${Math.round(v.plants)} plants`:""}</span></div>`).join("");
+  return `<div class="card" style="margin-bottom:10px"><b style="font-size:14px">🏃 Field</b>
+    ${timeRows?`<div style="margin-top:6px">${timeRows}</div>`:""}
+    ${jumpRows?`<div style="margin-top:6px">${jumpRows}</div>`:""}
+    ${wkBars?`<div style="margin-top:10px"><span style="font-size:11px;color:var(--dim)">weekly run yards & contact load</span>${wkBars}</div>`:""}
+    <div class="muted" style="font-size:10px;margin-top:6px">times: lower is better · green delta = faster than your first logged day</div></div>`;
+}
 function tabCharts(c){
   const chips = [["3m","3M"],["6m","6M"],["1y","1Y"],["all","All"]]
     .map(([k,l])=>`<button class="tab ${chartRange===k?"on":""}" data-crange="${k}">${l}</button>`).join("");
-  return `<div class="tabs" style="margin:0 0 10px">${chips}</div>
+  return `${fieldChartCard(c)}<div class="tabs" style="margin:0 0 10px">${chips}</div>
     <input type="text" id="chartsearch" value="${esc(chartSearch)}" placeholder="Search lifts…" autocomplete="off" style="margin-bottom:10px">
     <div id="chartlist">${buildChartCards(c)}</div>`;
 }
@@ -2931,7 +3279,7 @@ function rebuildClient(c){
 /* Save a parsed session for a specific client (used by log tab + client-submission review) */
 function applyParsedSession(c, items, date, title, solo){
   const before = {}; for (const p of c.prs) before[p.exercise] = { w: p.weight, r: p.reps, bw: !!p.bw, hold: !!p.hold, s2: p.secs };
-  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw,side,dur,dist,hold,band,bouts,ecc,pow})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(side?{side}:{}),...(hold?{hold:true}:{}),...(ecc?{ecc:true}:{}),...(pow?{pow:true}:{}),...(dur?{dur}:{}),...(bouts?{bouts}:{}),...(dist?{dist}:{}),...(band!==undefined?{band:band||"band"}:{}),...(setDetail?{setDetail}:{})})) });
+  c.sessions.push({ date, title: title||"Session", ...(solo?{solo:true}:{}), exercises: items.map(({name,sets,reps,weight,intensity,setDetail,bw,side,dur,dist,hold,band,bouts,ecc,pow,field,fd})=>({name,sets,reps,weight,intensity,...(bw?{bw:true}:{}),...(side?{side}:{}),...(hold?{hold:true}:{}),...(ecc?{ecc:true}:{}),...(pow?{pow:true}:{}),...(dur?{dur}:{}),...(bouts?{bouts}:{}),...(dist?{dist}:{}),...(band!==undefined?{band:band||"band"}:{}),...(setDetail?{setDetail}:{}),...(field?{field:true}:{}),...(fd?{fd}:{})})) });
   c.sessions.sort((a,b)=>b.date.localeCompare(a.date));
   rebuildClient(c);
   let prMsg = "";
@@ -3044,6 +3392,9 @@ function summaryModal(list){
       `<div style="width:${Math.round(100*d.mix[k]/mixTotal)}%;background:${mixCols[k]}"></div>`).join("");
     const mixLbl = ["warmup","moderate","heavy","max"].filter(k=>d.mix[k]).map(k=>`${Math.round(100*d.mix[k]/mixTotal)}% ${k}`).join(" · ");
     const stat = (v,l)=>`<div style="background:var(--panel2);border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:15px;font-weight:800">${v}</div><div style="color:var(--dim);font-size:10px">${l}</div></div>`;
+    const fs2 = d.fieldStats ? `<div style="background:var(--panel2);border-radius:10px;padding:10px 12px;margin-top:10px;font-size:12px">
+      <b style="color:var(--ice)">Field day</b> · ${d.fieldStats.runYds} run yds · ${d.fieldStats.wtd} wtd contacts (L ${d.fieldStats.L} / R ${d.fieldStats.R})${d.fieldStats.plants?` · ${d.fieldStats.plants} hard plants`:""}${d.fieldStats.topMph?` · top ${d.fieldStats.topMph} mph`:""}
+      ${d.fieldStats.prs && d.fieldStats.prs.length?`<div style="color:#8fd4a8;margin-top:4px">🏆 ${d.fieldStats.prs.map(esc).join(" · ")}</div>`:""}</div>` : "";
     return `<div${di?` style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)"`:""}>
       <div style="display:flex;align-items:baseline;gap:8px"><span style="color:var(--ice);font-size:16px;font-weight:800">${esc(d.name)}</span>
         <span style="color:var(--dim);font-size:12px">${esc(d.title)} · ${fmtDate(d.date)}</span></div>
@@ -3053,7 +3404,7 @@ function summaryModal(list){
       <div style="margin-top:10px"><div style="color:var(--dim);font-size:10px;letter-spacing:.4px">MUSCLES HIT · FATIGUE ADDED</div>
         <div style="margin-top:6px">${chips||'<span style="color:var(--dim);font-size:12px">Light day — nothing meaningfully fatigued.</span>'}</div></div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px">
-        ${stat(d.ex,"exercise"+(d.ex>1?"s":""))}${stat(d.sets,"sets")}${stat(d.lbs?d.lbs.toLocaleString():"—","lbs moved")}${stat(d.hardest||"—","top set")}</div>
+        ${stat(d.ex,"exercise"+(d.ex>1?"s":""))}${stat(d.sets,"sets")}${stat(d.lbs?d.lbs.toLocaleString():"—","lbs moved")}${stat(d.hardest||"—","top set")}</div>${fs2}
       ${mixLbl?`<div style="margin-top:10px"><div style="color:var(--dim);font-size:10px;letter-spacing:.4px">INTENSITY MIX</div>
         <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-top:5px">${mixBar}</div>
         <div style="color:var(--dim);font-size:10px;margin-top:3px">${mixLbl}</div></div>`:""}
@@ -3083,6 +3434,51 @@ function summaryModal(list){
   });
 }
 
+function saveFieldSession(){
+  const c = client();
+  if (!fieldDraft.length) return;
+  const bad = fieldDraft.find(it=>!(+it.reps));
+  if (bad){ toast("Every drill needs a rep count"); return; }
+  draftDate = $("#sessdate") ? ($("#sessdate").value || todayISO()) : todayISO();
+  const title = $("#sesstitle") && $("#sesstitle").value.trim() ? $("#sesstitle").value.trim() : "Field day";
+  /* field PR check BEFORE save (times lower = better, jumps higher = better) */
+  const fieldPrs = [];
+  for (const it of fieldDraft){
+    const d = fieldDrill(it.k); if (!d) continue;
+    if (d.time && it.best){
+      let prior = null;
+      for (const s of c.sessions) for (const x of (s.exercises||[]))
+        if (x.fd && x.fd.k===it.k && +x.fd.yds===+it.yds && x.fd.best && (prior===null || +x.fd.best < prior)) prior = +x.fd.best;
+      if (prior !== null && +it.best < prior) fieldPrs.push(`${d.name} ${it.yds}yd ${it.best}s (was ${prior}s)`);
+    }
+    if (d.jump && it.bestft){
+      let prior = null;
+      for (const s of c.sessions) for (const x of (s.exercises||[]))
+        if (x.fd && x.fd.k===it.k && x.fd.bestft && (prior===null || +x.fd.bestft > prior)) prior = +x.fd.bestft;
+      if (prior !== null && +it.bestft > prior) fieldPrs.push(`${d.name} ${it.bestft}${d.jump} (was ${prior}${d.jump})`);
+    }
+  }
+  const load = fieldSessionLoad(fieldDraft);
+  const bef = curSnap(c), sysB = curSys(c);
+  const items = fieldDraft.map(it=>{
+    const d = fieldDrill(it.k);
+    return { name: d.name, sets: Math.max(1, Math.min(12, +it.reps||1)), reps: "1",
+      intensity: fieldEffIntensity(+it.eff||80), field: true,
+      fd: { k: it.k, reps: +it.reps||0, ...(it.yds!=null?{yds:+it.yds}:{}), eff: +it.eff||0,
+        ...(it.best?{best:+it.best}:{}), ...(it.bestft?{bestft:+it.bestft}:{}),
+        ...(it.w?{w:+it.w}:{}), ...(it.side&&it.side!=="both"?{side:it.side}:{}) },
+      primary: exMuscles(d.name).p, secondary: exMuscles(d.name).s };
+  });
+  const r = applyParsedSession(c, items, draftDate, title, false);
+  const sum = buildSummary(c, items, draftDate, title, applyParsedSession.prs||[], bef, curSnap(c), sysB, curSys(c));
+  sum.fieldStats = { runYds: load.runYds, wtd: Math.round((load.L+load.R)*10)/10, L: load.L, R: load.R,
+    plants: Math.round(load.pL+load.pR), topMph: load.topMph, prs: fieldPrs };
+  fieldDraft = []; draftTitle = ""; persistDraft();
+  save(); autoBackup(true);
+  view.tab = "brief"; render();
+  summaryModal([sum]);
+  if (fieldPrs.length) toast("Field PR: " + fieldPrs[0]);
+}
 function saveSession(){
   const c = client();
   const p = duoPartner();
@@ -3910,7 +4306,7 @@ function addClient(){
 function bind(){
   const app = $("#app");
   app.onclick = e => {
-    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-holdtoggle],[data-ecctoggle],[data-powtoggle],[data-chipex],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injflag],[data-rfnone],[data-rfsome],[data-rfclear],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject],[data-mvplay],[data-mvscore],[data-mvadopt],[data-mvpin],[data-mvdel],[data-mvcompare],[data-cpt]");
+    const t = e.target.closest("[data-open],[data-act],[data-tab],[data-del],[data-duoside],[data-bwtoggle],[data-sideto],[data-durtoggle],[data-holdtoggle],[data-ecctoggle],[data-powtoggle],[data-chipex],[data-bandtoggle],[data-assign],[data-int],[data-mus],[data-pick],[data-close],[data-delnote],[data-pinnote],[data-sdmode],[data-sda],[data-sdx],[data-bm],[data-bmv],[data-fieldtoggle],[data-fdadd],[data-fddel],[data-fdside],[data-editsess],[data-delsess],[data-crange],[data-delrec],[data-injmus],[data-injgrade],[data-injchronic],[data-injside],[data-injflag],[data-rfnone],[data-rfsome],[data-rfclear],[data-injci],[data-testlog],[data-testadd],[data-testdel],[data-psfs],[data-cpg],[data-injnote],[data-injcopy],[data-injclear],[data-injdel],[data-subapprove],[data-subreject],[data-mvplay],[data-mvscore],[data-mvadopt],[data-mvpin],[data-mvdel],[data-mvcompare],[data-cpt]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.open){ const go = ()=>{ view={page:"client",clientId:ds.open,tab:"brief"}; draft=[]; draftTitle=""; draftText=""; resetDuo(); store.removeItem(DRAFT_KEY); chartSearch=""; render(); };
@@ -4044,6 +4440,12 @@ function bind(){
     else if (ds.sdmode!==undefined && ds.sdmode!==""){ const it=activeDraft()[+ds.sdmode];
       it.setDetail = Array.from({length:Math.max(1, it.sets||3)}, ()=>({reps:(it.reps||"").split(/[\/,-]/)[0]||"", weight:it.weight??null}));
       normalizeItem(it); render(); }
+    else if (ds.fieldtoggle){ fieldMode = ds.fieldtoggle === "on"; persistDraft(); render(); }
+    else if (ds.fdadd){ const k = $("#fdsel").value; const d = fieldDrill(k);
+      fieldDraft.push({ k, reps: d.reps, ...(d.yds!==undefined?{yds:d.yds}:{}), eff: d.eff, ...(d.sl?{side:"both"}:{}) });
+      persistDraft(); render(); }
+    else if (ds.fddel!==undefined && ds.fddel!==""){ fieldDraft.splice(+ds.fddel,1); persistDraft(); render(); }
+    else if (ds.fdside){ const [i2,sd]=ds.fdside.split(":"); fieldDraft[+i2].side = sd; persistDraft(); render(); }
     else if (ds.sda!==undefined && ds.sda!==""){ const it=activeDraft()[+ds.sda];
       const last=it.setDetail[it.setDetail.length-1]||{reps:"",weight:null};
       it.setDetail.push({reps:last.reps,weight:last.weight}); normalizeItem(it); render(); }
@@ -4063,6 +4465,7 @@ function bind(){
       else if (a==="picker"){ pickerOpen=true; render(); setTimeout(()=>$("#picksearch")?.focus(),50); }
       else if (a==="new-exercise"){ pickerOpen=false; assignTarget=-1; assignSel={}; view.tab="log"; render(); }
       else if (a==="save-session") saveSession();
+      else if (a==="save-field") saveFieldSession();
       else if (a==="confirm-assign") confirmAssign();
       else if (a==="cancel-assign"){ assignTarget=null; render(); }
       else if (a==="save-plan"){ client().nextPlan=$("#planbox").value.trim(); save(); toast("Plan saved"); }
@@ -4109,6 +4512,13 @@ function bind(){
       if (duoPartnerId && draft.length && !duoDraftB.length) duoDraftB = JSON.parse(JSON.stringify(draft));
       if (!duoPartnerId) duoDraftB = [];
       render(); return; }
+    if (ds.fda){ const [i2,k2] = ds.fda.split(":"); const it = fieldDraft[+i2];
+      if (it){ const v = t.value; it[k2] = v==="" ? null : (k2==="best"||k2==="bestft" ? parseFloat(v) : +v);
+        if (k2==="reps"||k2==="eff") it[k2] = Math.max(0, +v||0);
+        persistDraft();
+        if (k2==="reps"||k2==="best"||k2==="yds") { /* live meter update without full re-render on typing */ }
+      }
+      return; }
     const AD = activeDraft();
     if (ds.sets) AD[+ds.sets].sets = Math.max(1,+t.value||1);
     else if (ds.reps) AD[+ds.reps].reps = t.value;
