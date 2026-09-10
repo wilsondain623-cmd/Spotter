@@ -64,6 +64,8 @@ textarea{min-height:92px;resize:vertical;line-height:1.45}
 .draft-item{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px}
 .draft-item.bad{border-color:#7a4444}
 .d-name{font-weight:700;font-size:14px}
+.d-ctx{font-size:11px;color:var(--ice);margin-top:2px}
+.d-ctx b{color:var(--text);font-weight:700}
 .d-meta{font-size:12px;color:var(--dim);margin-top:2px}
 .ichips{display:flex;gap:5px;margin-top:8px;flex-wrap:wrap}
 .ichip{font-size:11px;font-weight:700;padding:4px 9px;border-radius:16px;background:var(--obsidian);border:1px solid var(--line);color:var(--dim);cursor:pointer}
@@ -1110,9 +1112,58 @@ function fetchAssess(){
     }).catch(()=>{});
 }
 let _novMemo = {};
+let _ctxMemo = {};
+/* history-at-a-glance for a lift: top set of the LAST session + best-ever set (by est 1RM /
+   reps / seconds). Excludes band work, cardio, and power sets (not strength signal). */
+function liftContext(c, name){
+  if (!c || !name) return null;
+  const key = c.id + "|" + E.normalize(name);
+  if (key in _ctxMemo) return _ctxMemo[key];
+  const e1 = (w,r)=> (!r||r<=1) ? w : Math.round(w*(1+Math.min(r,12)/30));
+  const secsOf = v => { const s=String(v==null?"":v); const m=s.match(/([\d.]+)\s*min/i); if (m) return Math.round(parseFloat(m[1])*60); const n=parseFloat(s); return isNaN(n)?0:Math.round(n); };
+  const norm = E.normalize(name);
+  let best = null, last = null, kind = null;
+  for (const s of (c.sessions||[])){
+    if (!s.exercises) continue;
+    for (const x of s.exercises){
+      if (E.normalize(x.name||"") !== norm) continue;
+      if (x.band !== undefined || x.dur || x.dist || x.pow) continue;
+      const sets = (x.setDetail && x.setDetail.length) ? x.setDetail : [{ weight: x.weight, reps: x.reps }];
+      let top = null;
+      for (const sd of sets){
+        const w = sd.weight != null ? sd.weight : x.weight;
+        const r = parseInt(sd.reps != null ? sd.reps : x.reps, 10) || 0;
+        let score, label, k2;
+        if (x.hold){ score = secsOf(sd.reps != null ? sd.reps : x.reps); if (!score) continue; label = score + "s hold"; k2 = "hold"; }
+        else if (x.bw || w == null){ if (!r) continue; score = r; label = r + " reps"; k2 = "bw"; }
+        else { if (!r && !w) continue; score = e1(w, r); label = w + "\u00d7" + (r || "?"); k2 = "wt"; }
+        if (!top || score > top.score) top = { score, label, k2 };
+      }
+      if (!top) continue;
+      kind = top.k2;
+      const entry = { date: s.date, set: top.label, score: top.score };
+      if (!last || s.date >= last.date) last = entry;
+      if (!best || top.score > best.score) best = { ...entry };
+    }
+  }
+  const out = last ? { last, best, kind } : null;
+  _ctxMemo[key] = out;
+  return out;
+}
+function liftCtxHtml(c, it){
+  if (it.unmatched || it.band !== undefined || it.dur || it.dist) return "";
+  const ctx = liftContext(c, it.name);
+  if (!ctx) return "";
+  const d = iso => { const dt = new Date(iso+"T00:00:00"); return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
+  const e1s = e => ctx.kind === "wt" && e.score ? ` \u00b7 ~${e.score} e1RM` : "";
+  if (ctx.best && ctx.best.date === ctx.last.date && ctx.best.set === ctx.last.set)
+    return `<div class="d-ctx">Last &amp; best (${d(ctx.last.date)}): <b>${esc(ctx.last.set)}</b>${e1s(ctx.last)}</div>`;
+  return `<div class="d-ctx">Last (${d(ctx.last.date)}): <b>${esc(ctx.last.set)}</b>${e1s(ctx.last)} &nbsp;\u2014&nbsp; Best: <b>${esc(ctx.best.set)}</b> (${d(ctx.best.date)})${e1s(ctx.best)}</div>`;
+}
 const _chipEx = new Set();
 function render(){
   _novMemo = {};
+  _ctxMemo = {};
   persistDraft();
   const app = $("#app");
   if (view.page === "review") app.innerHTML = reviewView();
@@ -1783,6 +1834,7 @@ function draftItemHtml(it, i){
     <div class="row"><div class="grow">
       <div class="d-name">${esc(it.unmatched?("? "+it.raw):it.name)}</div>
       <div class="d-meta">${it.unmatched?"exercise not recognized":esc((it.primary||[]).join(", ")+((it.secondary||[]).length?" · +"+it.secondary.join(", "):""))}${it.assumedSets?" · sets assumed":""}</div>
+      ${liftCtxHtml(activeDraftClient() || client(), it)}
     </div><button class="btn-x" data-del="${i}">✕</button></div>
     ${body}
   </div>`;
