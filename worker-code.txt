@@ -14,6 +14,9 @@
      Scopes: read:recovery read:sleep read:cycles read:profile offline
    ============================================================ */
 
+/* v14: daily check covers ALL clients w/ goal or program (blind-spot fix); first-booking
+   deadline ladder for programs flagged acct; always-one-on-the-books re-book rule;
+   c.acct.pauseUntil suspends. New sub kind "nobook".
 /* v13: POST /backup now MERGES with the stored state (sessions/dexa/recovery/etc
    union with tombstones; existing tokens kept; newest program wins) unless
    ?mode=replace. A stale device can no longer clobber the cloud.
@@ -106,7 +109,8 @@ function mergeClient(inc, ex){
   m.delDexa = Object.assign({}, ex.delDexa, inc.delDexa);
   const delProg = Math.max(inc.delProg||0, ex.delProg||0);
   if (delProg) m.delProg = delProg; else delete m.delProg;
-  m.sessions = unionBy(inc.sessions, ex.sessions, s=>s.sid||sessHash(s), m.delSess).sort(byDate);
+  /* app convention: sessions NEWEST-FIRST (roster "days since" reads [0]) */
+  m.sessions = unionBy(inc.sessions, ex.sessions, s=>s.sid||sessHash(s), m.delSess).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
   m.dexa = unionBy(inc.dexa, ex.dexa, d=>d.date, m.delDexa).sort(byDate);
   m.recovery = unionBy(inc.recovery, ex.recovery, r=>r.date).sort(byDate);
   m.photoLog = unionBy(inc.photoLog, ex.photoLog, p=>p.date||String(p)).sort();
@@ -243,6 +247,27 @@ function thursdayEmail(name, booked, goal, link){
   return { subject: `Half the week's gone — ${booked} of ${goal} booked`,
     html: `<p>Hey ${first},</p><p>Quick heads-up: the week's half over and you've got ${booked} of ${goal} sessions booked. Weekends fill up fast — <a href="${link}">grab your remaining slots now</a> so the goal stays realistic.</p><p>— Dain · Dwil Fitness</p>` };
 }
+function bookFirstEmail(name, stage, goal, link){
+  const first = (name || "there").split(" ")[0];
+  if (stage <= 1) return {
+    subject: `Your program's live, ${first} — grab your times`,
+    html: `<p>Hey ${first},</p><p>Your new program is up and waiting on your page. One thing left before it counts for anything: <a href="${link}">put your${goal ? " " + goal : ""} sessions on the calendar</a> — takes about 60 seconds.</p><p>Booked sessions happen. Unbooked ones don't.</p><p>— Dain · Dwil Fitness</p>` };
+  if (stage === 2) return {
+    subject: `${first} — your program's been sitting 3 days unscheduled`,
+    html: `<p>Hey ${first},</p><p>Your program went live 3 days ago and there's still nothing on your calendar. The plan doesn't work as a decoration — <a href="${link}">book your first sessions now</a>, even if it's just this week's.</p><p>If something about the plan or the timing doesn't work, reply and tell me — I'd rather fix it than watch it stall.</p><p>— Dain</p>` };
+  return {
+    subject: `${first} — still nothing booked. What's going on?`,
+    html: `<p>${first},</p><p>Your program has been ready for days and the calendar is still empty. You didn't sign up to own a PDF — you signed up to train.</p><p>Two options: <a href="${link}">book your sessions right now</a>, or reply and tell me honestly what's in the way so we can change the plan. Pick one today.</p><p>— Dain</p>` };
+}
+function rebookEmail(name, stage, link){
+  const first = (name || "there").split(" ")[0];
+  if (stage <= 1) return {
+    subject: `Nothing on your calendar, ${first} — book the next one`,
+    html: `<p>Hey ${first},</p><p>Your last booked session has passed and there's nothing scheduled ahead. Keep the chain going — <a href="${link}">grab your next time now</a> while you're thinking about it.</p><p>— Dain · Dwil Fitness</p>` };
+  return {
+    subject: `${first} — your calendar's been empty for days`,
+    html: `<p>${first},</p><p>Still nothing booked ahead. This is exactly how training quietly stops — not with a decision, just an empty calendar.</p><p><a href="${link}">Book your next session now</a>, or reply and tell me what's changed. Either way, don't leave it empty another day.</p><p>— Dain</p>` };
+}
 let _lastEmailErr = null;
 async function sendRawEmail(env, to, m){
   if (!env.RESEND_KEY){ _lastEmailErr = "no RESEND_KEY"; return false; }
@@ -296,15 +321,33 @@ async function runMissCheck(env, todayArg){
         if (ok){ s.emailed = true; emails++; }
       }
     }
-    /* ---- weekly session goal: Monday check-in + Thursday nudge ---- */
-    const goal = client && client.weeklyGoal > 0 ? client.weeklyGoal : 0;
+    /* prune ancient resolved slots */
+    if (rec.slots.length > 60) rec.slots = rec.slots.slice(-60);
+    if (changed) await schedSave(env, c, rec);
+  }
+  /* ---- accountability for EVERY client with a goal or program (v14) ----
+     Covers the blind spot: clients who never booked at all now get weekly
+     check-ins, first-booking deadlines (programs flagged acct), and the
+     always-one-on-the-books rule. c.acct.pauseUntil suspends everything. */
+  const dayDiff = (a, b) => Math.round((new Date(a + "T00:00:00Z") - new Date(b + "T00:00:00Z")) / 86400000);
+  for (const client of state.clients || []){
+    const c = client.id;
+    const goal = client.weeklyGoal > 0 ? client.weeklyGoal : 0;
+    const prog = client.program;
+    if (!prog) continue; /* accountability requires an assigned program - goal-only
+      (in-person) clients are never chased. Removing a program shuts it all off. */
+    const paused = client.acct && client.acct.pauseUntil && client.acct.pauseUntil >= today;
+    if (paused) continue;
+    const rec = await schedGet(env, c);
+    let changed = false;
+    const base = (env.ALLOWED_ORIGIN || "") + "/Spotter/log.html";
+    const link = client.token ? `${base}?c=${encodeURIComponent(c)}&t=${encodeURIComponent(client.token)}&w=${encodeURIComponent("https://dwil-sync.wilsondain623.workers.dev")}` : base;
+    /* -- weekly goal: Monday check-in + Thursday nudge (moved here so zero-booked clients get them too) -- */
     if (goal){
       const dow = (new Date(today + "T00:00:00Z").getUTCDay() + 6) % 7; /* 0 = Monday */
       const thisWk = weekStartOf(today);
       rec.weeks = rec.weeks || {};
       const booked = rec.slots.filter(s => s.status !== "canceled" && weekStartOf(s.d) === thisWk).length;
-      const base = (env.ALLOWED_ORIGIN || "") + "/Spotter/log.html";
-      const link = client.token ? `${base}?c=${encodeURIComponent(c)}&t=${encodeURIComponent(client.token)}&w=${encodeURIComponent("https://dwil-sync.wilsondain623.workers.dev")}` : base;
       const wk = rec.weeks[thisWk] = rec.weeks[thisWk] || {};
       if (dow === 0 && !wk.monday){
         wk.monday = true; changed = true;
@@ -328,12 +371,44 @@ async function runMissCheck(env, todayArg){
           if (ok) emails++;
         }
       }
-      /* prune old week entries */
       const wkKeys = Object.keys(rec.weeks);
       if (wkKeys.length > 12){ wkKeys.sort(); for (const k2 of wkKeys.slice(0, wkKeys.length - 12)) delete rec.weeks[k2]; changed = true; }
     }
-    /* prune ancient resolved slots */
-    if (rec.slots.length > 60) rec.slots = rec.slots.slice(-60);
+    /* -- first-booking deadline: programs assigned with accountability on -- */
+    if ((rec.slots || []).length && !rec.firstDone){ rec.firstDone = true; changed = true; }
+    if (prog && prog.acct && !(rec.slots || []).length && !rec.firstDone){
+      const daysSince = Math.max(0, dayDiff(today, prog.assigned || today));
+      const stage = daysSince >= 3 ? (2 + Math.floor((daysSince - 3) / 2)) : daysSince >= 1 ? 1 : 0;
+      if (stage > (rec.bookStage || 0)){
+        rec.bookStage = stage; changed = true;
+        if (client.email){
+          const ok = await sendRawEmail(env, client.email, bookFirstEmail(client.name, stage, goal, link));
+          if (ok) emails++;
+        }
+        if (stage >= 2) await pushSub(env, c, { kind: "nobook", date: today, title: "Booking deadline passed",
+          text: `Program assigned ${prog.assigned || "?"} — ${daysSince} days with nothing scheduled. Reminder stage ${stage} sent.` });
+      }
+    }
+    /* -- always one on the books: booked before, but calendar has run dry -- */
+    if ((rec.slots || []).length){
+      const future = rec.slots.some(s => s.status === "open" && s.d >= today);
+      if (future){
+        if (rec.dryStart){ delete rec.dryStart; delete rec.dryStage; changed = true; }
+      } else {
+        if (!rec.dryStart){ rec.dryStart = today; rec.dryStage = 0; changed = true; }
+        const dryDays = dayDiff(today, rec.dryStart);
+        const stage = dryDays >= 4 ? (2 + Math.floor((dryDays - 4) / 2)) : dryDays >= 2 ? 1 : 0;
+        if (stage > (rec.dryStage || 0)){
+          rec.dryStage = stage; changed = true;
+          if (client.email){
+            const ok = await sendRawEmail(env, client.email, rebookEmail(client.name, stage, link));
+            if (ok) emails++;
+          }
+          if (stage >= 2) await pushSub(env, c, { kind: "nobook", date: today, title: "Calendar ran dry",
+            text: `No future sessions booked for ${dryDays} days. Reminder stage ${stage} sent.` });
+        }
+      }
+    }
     if (changed) await schedSave(env, c, rec);
   }
   return { checked, misses, emails, today, ...(_lastEmailErr ? { emailErr: _lastEmailErr } : {}) };

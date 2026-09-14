@@ -1370,9 +1370,9 @@ function reviewView(){
           <button class="btn2 grow" style="color:#e0a8a8" data-subreject="${i}">Reject</button>
         </div></div>`;
     }
-    if (s.kind === "miss" || s.kind === "missreason" || s.kind === "weekshort"){
+    if (s.kind === "miss" || s.kind === "missreason" || s.kind === "weekshort" || s.kind === "nobook"){
       return `<div class="card" style="border-color:${s.kind==="miss"?"#c95f5f55":"#d4a04d55"}">
-        <div class="row"><div class="grow"><div class="cname">${s.kind==="miss"?"⚠":s.kind==="weekshort"?"🎯":"💬"} ${esc(name)} — ${s.kind==="miss"?"missed scheduled session":s.kind==="weekshort"?"under weekly goal":"gave a reason"}</div>
+        <div class="row"><div class="grow"><div class="cname">${s.kind==="miss"?"⚠":s.kind==="weekshort"?"🎯":s.kind==="nobook"?"📅":"💬"} ${esc(name)} — ${s.kind==="miss"?"missed scheduled session":s.kind==="weekshort"?"under weekly goal":s.kind==="nobook"?"nothing on the calendar":"gave a reason"}</div>
         <div class="csub">${fmtDate(s.date)} · ${esc(s.text)}</div></div></div>
         <div class="row" style="gap:8px;margin-top:10px">
           <button class="btn2 grow" data-subapprove="${i}">Acknowledge</button>
@@ -1474,7 +1474,7 @@ function rosterView(){
       <div class="avatar">${esc(c.name[0])}</div>
       <div class="grow"><div class="cname">${esc(c.name)}</div>
       <div class="csub">${last===null?"no sessions logged":last===0?"trained today":last+" days since last session"}</div></div>
-      ${missN?`<span class="chip" style="color:#e0a8a8;border-color:#c95f5f66">✗ missed</span>`:""}${injN?`<span class="chip" style="color:#e3c8ec;border-color:${INJ_COLOR}66">⚠ ${injN}</span>`:""}${payChip}${status}</div>`;
+      ${missN?`<span class="chip" style="color:#e0a8a8;border-color:#c95f5f66">✗ missed</span>`:""}${(pendingSubs||[]).some(s=>s.client===c.id && s.kind==="nobook")?`<span class="chip" style="color:#e0c48a;border-color:#d4a04d66">📅 not booked</span>`:""}${injN?`<span class="chip" style="color:#e3c8ec;border-color:${INJ_COLOR}66">⚠ ${injN}</span>`:""}${payChip}${status}</div>`;
   }).join("");
   const subBanner = (S.syncUrl && pendingSubs && pendingSubs.length)
     ? `<div class="card" style="border-color:#4D7DB4;cursor:pointer" data-act="review"><div class="row">
@@ -3716,6 +3716,7 @@ function programMenu(c){
       const p = parseProgram(html);
       if (!p){ toast("Couldn't read that — paste the whole HTML file from the builder"); return; }
       p.assigned = todayISO();
+      p.acct = true; /* booking accountability on for all NEW programs (grandfathered ones lack this) */
       const unmatched = [];
       for (const d of p.days) for (const it of d.items){ if (!E.matchExercise(it.name, S.customExercises)) unmatched.push(it.name); }
       const isFullDoc = /<body[\s>]/i.test(html);
@@ -3825,6 +3826,7 @@ function clientMenu(){
     <button class="btn2" style="width:100%;margin-top:8px" id="cmEmail">✉ Email${c.email?`  <span style="color:var(--dim);font-size:11px">${esc(c.email)}</span>`:"…"}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmDexa">🩻 DEXA scans${c.dexa&&c.dexa.length?` <span style="color:var(--dim);font-size:11px">${c.dexa[c.dexa.length-1].bf}% latest</span>`:"…"}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmWkGoal">🎯 Weekly goal${c.weeklyGoal?` <span style="color:var(--dim);font-size:11px">${c.weeklyGoal}/wk</span>`:"…"}</button>
+    <button class="btn2" style="width:100%;margin-top:8px" id="cmPause">⏸ ${c.acct&&c.acct.pauseUntil?`Accountability paused → ${c.acct.pauseUntil}`:"Pause booking accountability…"}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmSched">📅 Scheduled sessions…</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmProgram">📋 Program…${c.program?` <span style="color:#7dc98f;font-size:11px">(${c.program.days.length}-day assigned)</span>`:""}</button>
     <button class="btn2" style="width:100%;margin-top:8px" id="cmPay">Payment & sessions…</button>
@@ -3845,6 +3847,17 @@ function clientMenu(){
     if (ev.target.id==="cmPhoto"){ c.photoLog=c.photoLog||[]; if (!c.photoLog.includes(todayISO())){ c.photoLog.push(todayISO()); c.photoLog.sort(); save(); render(); toast("Progress photos logged for today"); } else toast("Already logged today"); wrap.remove(); }
     if (ev.target.id==="cmEmail"){ wrap.remove(); appPrompt("Client email (used for reports and missed-session accountability emails):", c.email||"", v=>{ const e2=v.trim(); if (e2) c.email=e2; else delete c.email; save(); autoBackup(true); render(); toast(e2?"Email saved":"Email cleared"); }); }
     if (ev.target.id==="cmDexa"){ wrap.remove(); dexaMenu(c); }
+    if (ev.target.id==="cmPause"){ wrap.remove();
+      const cur = c.acct && c.acct.pauseUntil;
+      appPrompt(`Pause booking accountability for how many days?${cur?` (currently paused until ${cur})`:""} Enter 0 to resume now.`, cur?"0":"7", v=>{
+        const n = parseInt(v,10);
+        if (isNaN(n)) return;
+        c.acct = c.acct || {};
+        if (n <= 0){ delete c.acct.pauseUntil; toast("Accountability resumed"); }
+        else { const d = new Date(); d.setDate(d.getDate()+n); c.acct.pauseUntil = localISO(d); toast(`Paused until ${c.acct.pauseUntil}`); }
+        if (!Object.keys(c.acct).length) delete c.acct;
+        save(); autoBackup(true); render(); });
+    }
     if (ev.target.id==="cmWkGoal"){ wrap.remove(); appPrompt("Sessions per week goal (blank or 0 = off). Drives their booking counter + Monday/Thursday accountability emails:", c.weeklyGoal||"", v=>{ const n = parseInt(v,10); if (n>0) c.weeklyGoal = n; else delete c.weeklyGoal; save(); autoBackup(true); render(); toast(n>0?`Goal set — ${n} sessions/week`:"Weekly goal off"); }); }
     if (ev.target.id==="cmSched"){ wrap.remove(); schedView(c); }
     if (ev.target.id==="cmProgram"){ wrap.remove(); programMenu(c); }
@@ -3959,7 +3972,7 @@ function approveSub(idx){
     ackSub(sid); render(); toast(`Check-in attached to ${inj.label}`);
     }
   }
-  if (s.kind === "miss" || s.kind === "missreason" || s.kind === "weekshort"){
+  if (s.kind === "miss" || s.kind === "missreason" || s.kind === "weekshort" || s.kind === "nobook"){
     const sid = s.id; pendingSubs = pendingSubs.filter(x=>x!==s); save();
     ackSub(sid); render(); return;
   }
