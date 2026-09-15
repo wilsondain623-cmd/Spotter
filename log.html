@@ -33,6 +33,9 @@ button{font-family:inherit;font-size:15px;font-weight:700;border:none;border-rad
 .done .big{font-size:40px}
 .muted{color:var(--dim);font-size:12px;line-height:1.5}
 .crescent{width:26px;height:26px}
+#a2hsWrap{position:fixed;left:0;right:0;bottom:0;z-index:98;padding:12px;pointer-events:none}
+#a2hsCard{pointer-events:auto;background:var(--panel,#141922);border:1px solid var(--steel,#4D7DB4);border-radius:14px;padding:14px 16px;max-width:520px;margin:0 auto;box-shadow:0 -6px 30px rgba(0,0,0,.55)}
+.a2s{font-size:12.5px;color:#F4F4F5;background:#1a1f2e;border-radius:9px;padding:8px 10px;margin-top:6px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -1248,6 +1251,66 @@ if (worker){
   }
 }
 render();
+</script>
+<script>
+/* add-to-home-screen prompt: platform-aware, shows once, keeps the personal link */
+(function(){
+  try {
+    var KEY = "dwil-a2hs";
+    var isStandalone = (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+    if (isStandalone) return;
+    var st = localStorage.getItem(KEY);
+    if (st === "done") return;
+    if (st && Date.now() < +st) return;
+    var ua = navigator.userAgent;
+    var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    var isAndroid = /Android/.test(ua);
+    var deferred = null;
+    if (isAndroid){
+      /* dynamic manifest: an Android install must open THIS exact link (token preserved),
+         never the trainer app — so start_url is the live URL, injected at runtime */
+      try {
+        var mf = { name:"Dwil Fitness", short_name:"Dwil", start_url: location.href, display:"standalone",
+          background_color:"#0A0E18", theme_color:"#0A0E18",
+          icons:[{src: location.origin + "/Spotter/icon-192.png", sizes:"192x192", type:"image/png"},
+                 {src: location.origin + "/Spotter/icon-512.png", sizes:"512x512", type:"image/png"}] };
+        var lk = document.createElement("link"); lk.rel = "manifest";
+        lk.href = URL.createObjectURL(new Blob([JSON.stringify(mf)], {type:"application/manifest+json"}));
+        document.head.appendChild(lk);
+        if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js");
+      } catch(e){}
+      window.addEventListener("beforeinstallprompt", function(e){ e.preventDefault(); deferred = e;
+        var b = document.getElementById("a2hsNative"); if (b) b.style.display = "block"; });
+    }
+    function steps(){
+      if (isIOS) return '<div class="a2s">1. Tap the <b>Share</b> button — the square with the arrow pointing up, at the bottom of Safari</div><div class="a2s">2. Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b></div>';
+      if (isAndroid) return '<div class="a2s">1. Tap the <b>&#8942;</b> menu in the top right of Chrome</div><div class="a2s">2. Tap <b>Add to Home screen</b>, then <b>Add</b></div>';
+      return '<div class="a2s">Press <b>Ctrl+D</b> (or <b>&#8984;D</b> on Mac) to bookmark this page — always one click away.</div>';
+    }
+    setTimeout(function(){
+      var w = document.createElement("div");
+      w.id = "a2hsWrap";
+      w.innerHTML = '<div id="a2hsCard">' +
+        '<div style="font-weight:800;font-size:15px;margin-bottom:4px">&#128241; Make this an app</div>' +
+        '<div style="font-size:12.5px;color:#CFD3DC;line-height:1.5">Add your training page to your ' + (isIOS || isAndroid ? 'home screen' : 'bookmarks') + ' — one tap and you&#39;re logging. Your personal link stays saved.</div>' +
+        '<button id="a2hsNative" style="display:none;width:100%;margin-top:10px;padding:11px;border-radius:10px;border:none;background:#4D7DB4;color:#fff;font-weight:700;font-size:14px">&#10133; Install now</button>' +
+        '<div id="a2hsSteps" style="display:none;margin-top:8px">' + steps() + '</div>' +
+        '<div style="display:flex;gap:8px;margin-top:10px">' +
+        '<button id="a2hsHow" style="flex:1;padding:10px;border-radius:10px;border:none;background:#4D7DB4;color:#fff;font-weight:700;font-size:13px">Show me how</button>' +
+        '<button id="a2hsDone" style="flex:1;padding:10px;border-radius:10px;border:1px solid #2A2F3A;background:transparent;color:#CFD3DC;font-weight:700;font-size:13px">Got it &#10003;</button>' +
+        '</div>' +
+        '<button id="a2hsLater" style="width:100%;margin-top:6px;padding:7px;border:none;background:none;color:#6B7280;font-size:11px">Remind me later</button></div>';
+      document.body.appendChild(w);
+      w.addEventListener("click", function(ev){
+        var id = ev.target && ev.target.id;
+        if (id === "a2hsHow"){ document.getElementById("a2hsSteps").style.display = "block"; ev.target.style.display = "none"; }
+        else if (id === "a2hsNative" && deferred){ deferred.prompt(); deferred.userChoice.then(function(r){ if (r && r.outcome === "accepted"){ localStorage.setItem(KEY, "done"); w.remove(); } }); }
+        else if (id === "a2hsDone"){ localStorage.setItem(KEY, "done"); w.remove(); }
+        else if (id === "a2hsLater"){ localStorage.setItem(KEY, String(Date.now() + 7*86400000)); w.remove(); }
+      });
+    }, 2500);
+  } catch(e){}
+})();
 </script>
 </body>
 </html>
