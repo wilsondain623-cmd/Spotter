@@ -107,6 +107,15 @@ function mergeClient(inc, ex){
   if (ex.token) m.token = ex.token; /* links already texted keep working */
   m.delSess = Object.assign({}, ex.delSess, inc.delSess);
   m.delDexa = Object.assign({}, ex.delDexa, inc.delDexa);
+  /* trainer notes union (was last-writer — a stale device could drop a note) */
+  m.notes = unionBy(inc.notes, ex.notes, n=>String((n&&n.date)||"")+"|"+String((n&&(n.text||n.note))||n||""));
+  if (!m.notes.length) delete m.notes;
+  /* accountability pause: later date wins so a pause set on one device sticks */
+  if ((ex.acct && ex.acct.pauseUntil) || (inc.acct && inc.acct.pauseUntil)){
+    m.acct = Object.assign({}, ex.acct, inc.acct);
+    const pu = [ex.acct && ex.acct.pauseUntil, inc.acct && inc.acct.pauseUntil].filter(Boolean).sort();
+    m.acct.pauseUntil = pu[pu.length-1];
+  }
   const delProg = Math.max(inc.delProg||0, ex.delProg||0);
   if (delProg) m.delProg = delProg; else delete m.delProg;
   /* app convention: sessions NEWEST-FIRST (roster "days since" reads [0]) */

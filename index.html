@@ -1473,7 +1473,7 @@ function rosterView(){
     return `<div class="card row" data-open="${c.id}" style="cursor:pointer">
       <div class="avatar">${esc(c.name[0])}</div>
       <div class="grow"><div class="cname">${esc(c.name)}</div>
-      <div class="csub">${last===null?"no sessions logged":last===0?"trained today":last+" days since last session"}</div></div>
+      <div class="csub">${last===null?"no sessions logged":last===0?"trained today":last+(last===1?" day":" days")+" since last session"}</div></div>
       ${missN?`<span class="chip" style="color:#e0a8a8;border-color:#c95f5f66">✗ missed</span>`:""}${(pendingSubs||[]).some(s=>s.client===c.id && s.kind==="nobook")?`<span class="chip" style="color:#e0c48a;border-color:#d4a04d66">📅 not booked</span>`:""}${injN?`<span class="chip" style="color:#e3c8ec;border-color:${INJ_COLOR}66">⚠ ${injN}</span>`:""}${payChip}${status}</div>`;
   }).join("");
   const subBanner = (S.syncUrl && pendingSubs && pendingSubs.length)
@@ -2046,6 +2046,21 @@ function fieldItemHtml(it, i){
   const c = client();
   const num = (k2, val, lbl, w2) => `<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:10px;color:var(--dim)">${lbl}</span><input type="number" inputmode="decimal" data-fda="${i}:${k2}" value="${val==null?"":val}" style="width:${w2||62}px"></div>`;
   const effSel = `<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:10px;color:var(--dim)">effort</span><select data-fda="${i}:eff" style="width:70px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:var(--text);padding:8px 4px">${[50,60,70,75,80,85,90,95,100].map(v=>`<option value="${v}" ${+it.eff===v?"selected":""}>${v}%</option>`).join("")}</select></div>`;
+  let _fnw = "";
+  if (c && d.name){
+    for (const m of (exMuscles(d.name).p || [])){
+      const key = c.id + "|" + m + "|" + (draftDate || todayISO());
+      if (!(key in _novMemo)) _novMemo[key] = muscleNovelty(c, m, draftDate || todayISO());
+      const nv = _novMemo[key];
+      if (nv.factor >= 1.15){
+        const eff = novEff(c, draftDate || todayISO(), nv.factor);
+        _fnw = nv.days == null
+          ? `first ever direct ${m} work — start conservative (fatigue counted ×${eff})`
+          : `${nv.horizon ? "no direct" : "first direct"} ${m} work in ${nv.days}d${nv.horizon ? " of tracking" : ""} — expect outsized soreness (fatigue counted ×${eff})`;
+        break;
+      }
+    }
+  }
   const cc = fieldContacts(it);
   const badges = [d.cat, d.cw?`×${d.cw} contacts`:null, d.pp?`${d.pp} plants/rep`:null].filter(Boolean)
     .map(b=>`<span style="font-size:10px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 7px">${b}</span>`).join(" ");
@@ -2055,6 +2070,7 @@ function fieldItemHtml(it, i){
       <div class="d-name">${esc(d.name||it.k)}</div>
       <div style="margin:2px 0 4px">${badges}</div>
       ${fieldCtxOf(c, it)}
+      ${_fnw?`<div style="color:#e0c48a;font-size:11px;font-weight:800;margin-top:3px">⚠ ${_fnw}</div>`:""}
     </div><button class="btn-x" data-fddel="${i}">✕</button></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:6px">
       ${num("reps", it.reps, "reps")}
@@ -2082,14 +2098,14 @@ function fieldMeterHtml(c){
   const legLine = (leg, v, wkv, st) => {
     const tot = Math.round((v + wkv)*10)/10;
     return `<div style="margin-top:8px"><b style="font-size:12px">${leg} leg:</b> <span style="font-size:12px">${Math.round(v*10)/10} wtd contacts this session</span>
-      <span style="font-size:11px;color:var(--dim)"> · session range ${st.contacts[0]}–${st.contacts[1]} · week ${tot} / ${st.week[0]}–${st.week[1]}</span>
+      <span style="font-size:11px;color:var(--dim)"> · session range ${st.contacts[0]}–${st.contacts[1]} · last 7d ${tot} / ${st.week[0]}–${st.week[1]}</span>
       ${bar(v, st.contacts[0], st.contacts[1])}</div>`;
   };
   let inner = "";
   for (const st of statuses){
     const why = `${st.prof.label}${st.generic?" (generic lower-limb)":""} — ${FIELD_PHASES[st.phase]} phase · HI ${st.hi} · day ${st.days}`;
     const plants = draftLoad.pL + draftLoad.pR + wk.pL + wk.pR;
-    const plantLine = `<div style="font-size:11px;margin-top:4px;color:${st.plants==="none"&&plants>0?"#e0a86a":"var(--dim)"}">plants: ${st.plants==="none"?"none suggested this phase":st.plants==="intro"?"intro — sub-max angle/speed":"open"}${plants?` · ${Math.round(plants)} in draft+week`:""} · sprints ≤${st.sprint}% effort</div>`;
+    const plantLine = `<div style="font-size:11px;margin-top:4px;color:${st.plants==="none"&&plants>0?"#e0a86a":"var(--dim)"}">plants: ${st.plants==="none"?"none suggested this phase":st.plants==="intro"?"intro — sub-max angle/speed":"open"}${plants?` · ${Math.round(plants)} in draft + last 7d`:""} · sprints ≤${st.sprint}% effort</div>`;
     if (st.side){
       const v = st.side==="L" ? draftLoad.L : draftLoad.R;
       const wv = st.side==="L" ? wk.L : wk.R;
@@ -3404,7 +3420,7 @@ function summaryModal(list){
       <div style="margin-top:10px"><div style="color:var(--dim);font-size:10px;letter-spacing:.4px">MUSCLES HIT · FATIGUE ADDED</div>
         <div style="margin-top:6px">${chips||'<span style="color:var(--dim);font-size:12px">Light day — nothing meaningfully fatigued.</span>'}</div></div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px">
-        ${stat(d.ex,"exercise"+(d.ex>1?"s":""))}${stat(d.sets,"sets")}${stat(d.lbs?d.lbs.toLocaleString():"—","lbs moved")}${stat(d.hardest||"—","top set")}</div>${fs2}
+        ${stat(d.ex,"exercise"+(d.ex>1?"s":""))}${stat(d.sets, d.fieldStats?"drill reps":"sets")}${stat(d.lbs?d.lbs.toLocaleString():"—","lbs moved")}${stat(d.hardest||"—","top set")}</div>${fs2}
       ${mixLbl?`<div style="margin-top:10px"><div style="color:var(--dim);font-size:10px;letter-spacing:.4px">INTENSITY MIX</div>
         <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-top:5px">${mixBar}</div>
         <div style="color:var(--dim);font-size:10px;margin-top:3px">${mixLbl}</div></div>`:""}
@@ -3476,6 +3492,7 @@ function saveFieldSession(){
   fieldDraft = []; draftTitle = ""; persistDraft();
   save(); autoBackup(true);
   view.tab = "brief"; render();
+  checkPackRenewal(c);
   summaryModal([sum]);
   if (fieldPrs.length) toast("Field PR: " + fieldPrs[0]);
 }
