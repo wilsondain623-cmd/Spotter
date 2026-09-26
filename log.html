@@ -924,6 +924,7 @@ function suggestedDay(p){
   const last = parseInt(localStorage.getItem("dwil-prog-last-day")||"-1",10);
   return ((isNaN(last)?-1:last)+1) % p.days.length;
 }
+const BANDS = ["yellow","red","green","blue","black","purple","orange","gray"];
 const EFFORTS = [["warmup","easy"],["moderate","solid"],["heavy","hard"],["max","max effort"]];
 function workoutView(){
   if (meErr) return `<div class="card"><h1>Workout unavailable</h1><div class="sub">${esc(meErr)}</div></div>`;
@@ -945,7 +946,7 @@ function workoutView(){
     const nSets = ts ? ts.length : (it.sets || 3);
     const tline = ts
       ? `Targets: ${ts.map(s2=>`${s2.w??"—"}×${s2.r??"?"}`).join(", ")}${it.rest?` · rest ${esc(it.rest)}`:""}${it.perSide?" · each side":""}`
-      : `${it.sets} sets × ${esc(it.reps)}${it.tw?` · goal ${it.tw} lbs`:""}${it.ti?` · ${it.ti} effort`:""}${it.rest?` · rest ${esc(it.rest)}`:""}${it.perSide?" · each side":""}`;
+      : `${it.sets} sets × ${esc(it.reps)}${it.band?" · band":""}${it.tw&&!it.band?` · goal ${it.tw} lbs`:""}${it.ti?` · ${it.ti} effort`:""}${it.rest?` · rest ${esc(it.rest)}`:""}${it.perSide?" · each side":""}`;
     const defEff = progEff[ii] || it.ti || "moderate";
     const rows = skipped ? "" : Array.from({length:nSets},(_,si)=>{
       const t2 = ts ? ts[si] || {} : {};
@@ -954,9 +955,11 @@ function workoutView(){
       const sel = progSetEff[ii+":"+si] || "";
       return `<div style="display:flex;gap:6px;align-items:center;margin-top:6px">
         <span style="color:var(--dim);font-size:11px;width:34px">set ${si+1}</span>
-        <input type="number" inputmode="decimal" id="w-${ii}-${si}" value="${pw}" placeholder="${t2.w??"lbs"}" style="width:72px;margin:0">
+        ${it.band ? (()=>{ const pb = prev && prev[si] && prev[si].b ? prev[si].b : ""; return `<select id="b-${ii}-${si}" style="width:86px;margin:0;background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:${pb?"var(--text)":"var(--dim)"};font-size:12px;padding:8px 4px"><option value="" ${pb?"":"selected"}>band…</option>${BANDS.map(b=>`<option value="${b}" ${pb===b?"selected":""}>${b}</option>`).join("")}</select>`; })()
+          : it.bw ? `<span style="width:72px;text-align:center;color:var(--dim);font-size:12px">body wt</span>`
+          : `<input type="number" inputmode="decimal" id="w-${ii}-${si}" value="${pw}" placeholder="${t2.w??"lbs"}" style="width:72px;margin:0">`}
         <span style="color:var(--dim)">×</span>
-        <input type="number" inputmode="numeric" id="r-${ii}-${si}" value="${pr}" placeholder="${t2.r??"reps"}" style="width:72px;margin:0">
+        <input type="number" inputmode="numeric" id="r-${ii}-${si}" value="${pr}" placeholder="${t2.r??(it.hold?"sec":"reps")}" style="width:72px;margin:0">
         <select id="e-${ii}-${si}" style="width:86px;margin:0;background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:${sel?"var(--text)":"var(--dim)"};font-size:11px;padding:8px 4px">
           <option value="" ${sel?"":"selected"}>↳ ${(EFFORTS.find(e2=>e2[0]===(t2.i||defEff))||["","solid"])[1]}</option>
           ${EFFORTS.map(([k,l])=>`<option value="${k}" ${sel===k?"selected":""}>${l}</option>`).join("")}
@@ -1021,20 +1024,24 @@ function sendWorkout(){
     const nSets = ts ? ts.length : (it.sets || 3);
     const sd = []; const rem = [];
     for (let si=0; si<nSets; si++){
-      const w = parseFloat((app.querySelector("#w-"+ii+"-"+si)||{}).value);
+      const w = it.band || it.bw ? NaN : parseFloat((app.querySelector("#w-"+ii+"-"+si)||{}).value);
+      const bc = it.band ? ((app.querySelector("#b-"+ii+"-"+si)||{}).value||"") : "";
       const r = ((app.querySelector("#r-"+ii+"-"+si)||{}).value||"").trim();
-      if (!r && isNaN(w)) continue;
+      if (!r && isNaN(w) && !bc) continue;
       if (!r){ needReps.push(`${it.name} set ${si+1}`); continue; }
       const se = progSetEff[ii+":"+si] || "";
-      sd.push({ weight: isNaN(w)?null:w, reps: r, ...(se?{intensity:se}:{}) });
-      rem.push({ w: isNaN(w)?"":w, r });
+      sd.push({ weight: isNaN(w)?null:w, reps: r, ...(se?{intensity:se}:{}), ...(it.band?{band:bc||"band"}:{}) });
+      rem.push({ w: isNaN(w)?"":w, r, ...(bc?{b:bc}:{}) });
     }
     if (!sd.length){ items.push({ name: it.name, skipped: true }); lines.push(it.name + " — skipped"); return; }
     const eff = progEff[ii] || it.ti || "moderate";
     const wts = sd.map(x=>x.weight).filter(x=>x!=null);
+    const bandCols = it.band ? [...new Set(sd.map(x=>x.band).filter(b=>b&&b!=="band"))] : [];
     items.push({ name: it.name, sets: sd.length, reps: sd.map(x=>x.reps).join("/"),
-      weight: wts.length?Math.max(...wts):null, intensity: eff, setDetail: sd, ...(wts.length?{}:{bw:true}) });
-    lines.push(`${it.name} ${sd.map(x=>`${x.weight!=null?x.weight+"×":""}${x.reps}${x.intensity&&x.intensity!==eff?" "+x.intensity:""}`).join(", ")} (${eff})`);
+      weight: wts.length?Math.max(...wts):null, intensity: eff, setDetail: sd,
+      ...(it.band ? { band: bandCols.length ? bandCols.join("/") : "band" } : (wts.length?{}:{bw:true})),
+      ...(it.hold?{hold:true}:{}) });
+    lines.push(`${it.name} ${sd.map(x=>`${x.band?x.band+" band ×":x.weight!=null?x.weight+"×":""}${x.reps}${x.intensity&&x.intensity!==eff?" "+x.intensity:""}`).join(", ")} (${eff})`);
     acts[it.name] = rem;
   });
   if (needReps.length){ alert("Add reps for: " + needReps.join(", ") + ".\nWeight without reps can't be counted — or clear the weight to skip that set."); return; }
