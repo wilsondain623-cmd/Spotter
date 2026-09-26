@@ -1886,7 +1886,7 @@ function volumeCard(c){
 }
 
 function flagsBlock(c){
-  const pinned = c.notes.filter(n=>n.pinned);
+  const pinned = (c.notes||[]).filter(n=>n.pinned);
   if (!pinned.length) return "";
   return `<div class="card" style="border-color:#6b5b2e">${pinned.map(n=>
     `<div style="font-size:13px;color:#e8d9a8;line-height:1.5;padding:2px 0">⚠ ${esc(n.text)} <span style="color:#8b93a5;font-size:11px">· ${fmtDate(n.date)}</span></div>`).join("")}</div>`;
@@ -3168,6 +3168,7 @@ function tabHistory(c){
 }
 
 function tabNotes(c){
+  if (!c.notes) c.notes = [];
   const notes = c.notes.map((n,i)=>`<div class="note" ${n.pinned?'style="border-left:3px solid #b89b4a;padding-left:8px"':""}>
     <div class="nd">${fmtDate(n.date)}${n.pinned?' · <span style="color:#e8d9a8">⚠ pinned to brief</span>':""}</div>${esc(n.text)}
     <div style="float:right;margin-top:-26px"><button class="btn-x" data-pinnote="${i}" title="Pin to brief">${n.pinned?"📌":"📍"}</button><button class="btn-x" data-delnote="${i}">✕</button></div></div>`).join("")
@@ -4591,6 +4592,15 @@ function bind(){
 restoreDraft();
 render();
 try { bootSync(); } catch(e){}
+/* resume sync: phone PWAs are resumed, not reloaded — pick up programs/changes sent from other devices */
+let _lastBootSync = Date.now();
+document.addEventListener("visibilitychange", ()=>{
+  if (document.visibilityState !== "visible" || _backupBusy) return;
+  if (Date.now() - _lastBootSync < 60000) return;
+  if (document.querySelector(".modal-bg")) return; /* never swap data under an open editor */
+  _lastBootSync = Date.now();
+  try { bootSync(); } catch(e){}
+});
 
 </script>
 <script>
